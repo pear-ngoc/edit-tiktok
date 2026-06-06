@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "edit-tiktok"
+version = "0.1.0"
+description = "Cross-platform FFmpeg batch video processing tool"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "edit-tiktok maintainers" }]
+dependencies = [
+    "PyYAML>=6.0.1",
+    "faster-whisper>=1.0.0",
+    "python-telegram-bot>=21.0",
+    "Pillow>=10.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+edit-tiktok = "cli:main"
+
+[tool.setuptools]
+py-modules = ["cli", "app", "config", "logging_config", "models", "queue_manager"]
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["ffmpeg_tools*", "processing*", "utils*", "integrations*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

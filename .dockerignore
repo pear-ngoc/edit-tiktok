@@ -1,0 +1,17 @@
+.git
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache
+.ruff_cache
+.mypy_cache
+logs/*
+temp/*
+output/*
+data/*
+failed/*
+completed/*
+__MACOSX
+.DS_Store

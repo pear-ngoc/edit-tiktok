@@ -1,0 +1,171 @@
+processing:
+  input_dir: input
+  output_dir: output
+  temp_dir: temp
+  recursive: true
+  delete_source: false
+  max_workers: auto
+  debug_ffmpeg: false
+  preflight_enabled: true
+  skip_invalid_videos: true
+  fail_fast_on_preflight_error: false
+
+queue:
+  enabled: true
+  max_workers: 5
+  watch_input: true
+  scan_interval_seconds: 3
+  stable_file_check_seconds: 2
+  move_failed_to: failed
+  move_completed_to: null
+  state_file: data/jobs.json
+
+telegram:
+  enabled: false
+  bot_token: ""
+  allowed_chat_ids: []
+  allow_all_chats_if_empty: true
+  send_progress_messages: true
+  edit_progress_message: true
+  progress_language: vi
+  send_output_video: true
+  max_video_send_mb: 49
+  api_base_url: ""
+  api_file_url: ""
+  local_mode: false
+  input_subdir: input/telegram
+  message_when_queued: "Video received and queued."
+  message_when_done: "Your video is ready."
+  message_when_failed: "Video processing failed."
+
+revid_api:
+  enabled: true
+  api_key: ""
+  endpoint: "https://api.revidapi.com/paid/tiktok/download"
+  timeout_seconds: 60
+  download_timeout_seconds: 300
+
+video:
+  aspect_ratio: "9:16"
+  mode: "blur"
+  target_resolution: "720p"
+  keep_original_resolution: false
+  speed: 1.1
+  segment_mode: "random"
+  min_segment_seconds: 3.0
+  max_segment_seconds: 5.0
+  scene_threshold: 0.3
+  alternating_flip: true
+  base_zoom: 1.52
+  alternating_zoom: [1.0, 1.05]
+  fade_seconds: 0.5
+  noise_overlay: false
+  noise_alpha: 0.01
+
+color:
+  lut_enabled: true
+  max_luts: 3
+  selected_luts: []
+  auto_select_luts: false
+  contrast: 1.03
+  saturation: 1.08
+  sharpen: true
+
+audio:
+  volume: 0.95
+  tempo_match_speed: true
+  pitch_shift_semitones: 0
+  random_eq: false
+  eq_bass_range: [-6, 6]
+  eq_treble_range: [-6, 6]
+  ambient_enabled: false
+  ambient_dir: assets/ambient
+  ambient_volume: 0.01
+  bgm_enabled: false
+  bgm_dir: assets/bgm
+  bgm_volume: 0.05
+
+metadata:
+  mode: keep
+  custom:
+    title: ""
+    artist: ""
+    comment: ""
+
+encoder:
+  backend: auto
+  codec: h264
+  preset: balanced
+  pix_fmt: yuv420p
+  faststart: true
+
+subtitles:
+  enabled: true
+  backend: faster-whisper
+  model_size: medium
+  language: auto
+  output_srt: true
+  output_vtt: false
+  burn_in: false
+  burn_language: auto
+  device: auto
+  compute_type: auto
+  output_dir: output/subtitles
+  word_timestamps: true
+
+formatting:
+  max_chars_per_line: 20
+  max_lines: 2
+  max_chars_per_cue: 40
+  max_words_per_cue: 7
+  min_duration: 0.7
+  max_duration: 2.6
+  pause_threshold: 0.45
+  caption_renderer: rounded_box
+  caption_position: bottom
+  caption_vertical_offset: 0
+  caption_font_name: Arial
+  caption_font_file: BeVietnamPro-Bold.ttf
+  caption_font_fallback: Arial
+  caption_font_size: 54
+  caption_text_color: "#111111"
+  caption_text_opacity: 1.0
+  caption_background_color: "#FFFFFF"
+  caption_background_opacity: 0.95
+  caption_padding_x: 28
+  caption_padding_y: 14
+  caption_border_radius: 18
+  caption_outline_color: "#000000"
+  caption_outline_opacity: 0.0
+  caption_outline: 0
+  caption_shadow_enabled: true
+  caption_shadow_color: "#000000"
+  caption_shadow_opacity: 0.25
+  caption_shadow_offset_x: 0
+  caption_shadow_offset_y: 4
+  caption_shadow_blur: 6
+  caption_margin_v: 140
+  caption_max_width_percent: 82
+  caption_box_enabled: true
+  caption_shadow: 1
+
+logging:
+  level: INFO
+  console_level: INFO
+  file_level: DEBUG
+  third_party_level: WARNING
+  compact_console: true
+  debug_ffmpeg_commands: false
+  ffmpeg_stderr_tail_lines: 40
+  per_job_logs: true
+  retain_failed_temp: true
+  show_stage_start: false
+  show_stage_done: true
+  segment_log_mode: summary
+  caption_log_mode: summary
+  queue_duplicate_log_level: DEBUG
+  queue_heartbeat_seconds: 60
+  progress_interval_seconds: 10.0
+  suppress_repeated_messages_seconds: 60
+  redact_secrets: true
+  show_runtime_plan: false
