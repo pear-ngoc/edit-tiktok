@@ -529,6 +529,13 @@ class QueueManager:
         tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         tmp_path.replace(self.state_path)
 
+    def clear_state(self) -> None:
+        with self._lock:
+            self._jobs.clear()
+            self._jobs_by_identity.clear()
+            self._jobs_by_path.clear()
+            self.save_state_locked()
+
     def _is_queueable_path(self, path: Path) -> bool:
         try:
             relative = path.resolve().relative_to(self.input_root.resolve())

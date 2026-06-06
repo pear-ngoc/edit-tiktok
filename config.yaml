@@ -128,7 +128,7 @@ encoder:
   faststart: true
 
 subtitles:
-  enabled: false
+  enabled: true
   backend: faster-whisper
   model_size: large-v3
   language: auto

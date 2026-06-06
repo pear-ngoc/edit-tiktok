@@ -17,6 +17,7 @@ from integrations.revid_api import (
 from integrations.tiktok import extract_tiktok_urls
 from models import AppConfig, JobSource, JobStatus, ProcessResult, VideoJob
 from utils.files import sanitize_filename, unique_path
+from utils.cleanup import clear_workspace as clear_runtime_workspace
 from utils.paths import ensure_runtime_dirs, resolve_project_path
 from utils.runtime_logging import build_job_runtime_context, job_context_scope, job_prefix
 
@@ -133,7 +134,7 @@ class TelegramBotService:
     def _import_telegram_modules(self) -> None:
         try:
             import telegram  # noqa: F401
-            from telegram.ext import ApplicationBuilder, MessageHandler, filters
+            from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters
             from telegram.request import HTTPXRequest
             from telegram.error import BadRequest, RetryAfter
         except Exception as exc:  # pragma: no cover - dependency missing
@@ -142,6 +143,7 @@ class TelegramBotService:
                 "Thiếu phụ thuộc python-telegram-bot. Hãy cài để chạy Telegram bot."
             ) from exc
         self._telegram_application_builder = ApplicationBuilder
+        self._telegram_command_handler = CommandHandler
         self._telegram_message_handler = MessageHandler
         self._telegram_filters = filters
         self._telegram_httpx_request_class = HTTPXRequest
@@ -174,6 +176,7 @@ class TelegramBotService:
             api_settings["local_mode"],
         )
         application = builder.build()
+        application.add_handler(self._telegram_command_handler("clear", self._handle_clear_command))
         application.add_handler(
             self._telegram_message_handler(
                 self._telegram_filters.TEXT & ~self._telegram_filters.COMMAND,
@@ -230,6 +233,9 @@ class TelegramBotService:
             return
 
         text = message.text or message.caption or ""
+        if text.strip().lower() == "clear":
+            await self._handle_clear_request(message, chat_id, scope="all")
+            return
         urls = extract_tiktok_urls(text)
         LOGGER.info("Telegram URLs trích xuất | chat_id=%s | count=%s | urls=%s", chat_id, len(urls), urls)
         if not urls:
@@ -237,6 +243,49 @@ class TelegramBotService:
 
         for url in urls:
             await self._handle_tiktok_url(message, chat_id, url)
+
+    async def _handle_clear_command(self, update: Any, context: Any) -> None:  # noqa: ANN401
+        message = update.effective_message
+        chat = update.effective_chat
+        if message is None or chat is None:
+            return
+        chat_id = int(chat.id)
+        if not self._is_chat_allowed(chat_id):
+            await message.reply_text("Bạn không có quyền sử dụng bot này.")
+            return
+        args = list(getattr(context, "args", []) or [])
+        scope = args[0].strip().lower() if args else "all"
+        await self._handle_clear_request(message, chat_id, scope=scope)
+
+    async def _handle_clear_request(self, message: Any, chat_id: int, *, scope: str = "all") -> None:  # noqa: ANN401
+        if scope not in {"all", "input", "generated"}:
+            await message.reply_text("Scope clear không hợp lệ. Dùng: /clear, /clear input, hoặc /clear generated.")
+            return
+        include_input = scope in {"all", "input"}
+        include_generated = scope in {"all", "generated"}
+        await message.reply_text("🧹 Đang clear workspace...")
+        try:
+            result = await asyncio.to_thread(
+                clear_runtime_workspace,
+                self.project_root,
+                self.config,
+                include_input=include_input,
+                include_generated=include_generated,
+                dry_run=False,
+            )
+            clear_state = getattr(self.queue_manager, "clear_state", None)
+            if callable(clear_state):
+                await asyncio.to_thread(clear_state)
+            LOGGER.info("Telegram clear workspace | chat_id=%s | scope=%s | removed=%s", chat_id, scope, result.removed_count)
+            await message.reply_text(
+                "✅ Đã clear workspace.\n"
+                f"Scope: {scope}\n"
+                f"Đã xoá: {result.removed_count} thư mục\n"
+                "Google Drive OAuth token được giữ lại."
+            )
+        except Exception as exc:
+            LOGGER.exception("Telegram clear workspace thất bại | chat_id=%s | scope=%s", chat_id, scope)
+            await message.reply_text(f"❌ Clear thất bại: {_safe_telegram_error(str(exc))}")
 
     async def _handle_tiktok_url(self, message: Any, chat_id: int, url: str) -> None:  # noqa: ANN401
         try:

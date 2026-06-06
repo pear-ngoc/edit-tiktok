@@ -516,6 +516,18 @@ python main.py clear --dry-run
 
 Mặc định `clear` sẽ xoá cả `input/` lẫn các dữ liệu sinh ra như `output/`, `temp/`, `logs/`, `data/`, `failed/`, `completed/` và các profile đã lưu trong `configs/`. Lệnh sẽ hỏi xác nhận trước khi xoá, trừ khi bạn truyền `--yes`. Nếu chỉ muốn xem trước danh sách cần xoá, dùng `--dry-run`.
 
+Riêng Google Drive OAuth token tại `storage.google_drive.oauth_token_file`, mặc định `data/google-drive-token.json`, sẽ được giữ lại khi clear để bạn không phải đăng nhập OAuth lại.
+
+Trong Telegram bot, bạn có thể gửi:
+
+```text
+/clear
+/clear input
+/clear generated
+```
+
+Lệnh `/clear` qua Telegram chạy như `python main.py clear --yes`: không hỏi confirm, đồng thời reset queue state trong runtime đang chạy.
+
 ### Cấu hình queue
 
 ```yaml

@@ -59,6 +59,7 @@ def clear_workspace(
     include_generated: bool = True,
     dry_run: bool = False,
 ) -> CleanupResult:
+    preserved_files = _read_preserved_files(project_root, config)
     targets = build_clear_targets(
         project_root,
         config,
@@ -77,5 +78,23 @@ def clear_workspace(
     if not dry_run:
         ensure_gitkeep_files(project_root)
         ensure_runtime_dirs(project_root, config)
+        _restore_preserved_files(preserved_files)
 
     return CleanupResult(removed_paths=removed, dry_run=dry_run)
+
+
+def _read_preserved_files(project_root: Path, config: AppConfig) -> dict[Path, bytes]:
+    paths = [
+        resolve_project_path(project_root, config.storage.google_drive.oauth_token_file),
+    ]
+    preserved: dict[Path, bytes] = {}
+    for path in paths:
+        if path.exists() and path.is_file():
+            preserved[path] = path.read_bytes()
+    return preserved
+
+
+def _restore_preserved_files(files: dict[Path, bytes]) -> None:
+    for path, content in files.items():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)

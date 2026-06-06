@@ -46,3 +46,17 @@ def test_clear_workspace_dry_run_keeps_files(tmp_path: Path) -> None:
 
     assert result.dry_run is True
     assert (tmp_path / "input" / "a.mp4").exists()
+
+
+def test_clear_workspace_preserves_google_drive_oauth_token(tmp_path: Path) -> None:
+    config = default_config()
+    config.storage.google_drive.oauth_token_file = "data/google-drive-token.json"
+    ensure_runtime_dirs(tmp_path, config)
+
+    _write(tmp_path / "data" / "google-drive-token.json", '{"token":"keep"}')
+    _write(tmp_path / "data" / "jobs.json", "{}")
+
+    clear_workspace(tmp_path, config, include_input=True, include_generated=True)
+
+    assert (tmp_path / "data" / "google-drive-token.json").read_text(encoding="utf-8") == '{"token":"keep"}'
+    assert not (tmp_path / "data" / "jobs.json").exists()

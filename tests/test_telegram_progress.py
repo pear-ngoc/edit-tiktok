@@ -14,6 +14,7 @@ class DummyQueueManager:
         self.jobs: dict[str, VideoJob] = {}
         self.enqueue_calls: list[dict[str, object]] = []
         self.update_calls: list[tuple[str, dict[str, object]]] = []
+        self.clear_state_called = False
 
     def enqueue_path(self, path: Path, **kwargs):  # noqa: ANN001
         self.enqueue_calls.append({"path": path, **kwargs})
@@ -44,6 +45,9 @@ class DummyQueueManager:
             if hasattr(job, key):
                 setattr(job, key, value)
         return job
+
+    def clear_state(self) -> None:
+        self.clear_state_called = True
 
 
 def _make_service(tmp_path: Path, monkeypatch, config=None) -> tuple[TelegramBotService, DummyQueueManager]:
@@ -280,6 +284,45 @@ def test_worker_thread_bridge_uses_run_coroutine_threadsafe(tmp_path: Path, monk
     assert service._edit_status_message_sync(job, "🎬 Đang xử lý video...") is True
     assert called["loop"] is service._loop
     assert "coro" in called
+
+
+def test_telegram_clear_command_runs_without_confirmation(tmp_path: Path, monkeypatch) -> None:
+    service, queue_manager = _make_service(tmp_path, monkeypatch)
+    calls: list[dict[str, object]] = []
+
+    def fake_clear(project_root, config, *, include_input, include_generated, dry_run):  # noqa: ANN001
+        calls.append(
+            {
+                "project_root": project_root,
+                "include_input": include_input,
+                "include_generated": include_generated,
+                "dry_run": dry_run,
+            }
+        )
+        return SimpleNamespace(removed_count=7)
+
+    monkeypatch.setattr("integrations.telegram_bot.clear_runtime_workspace", fake_clear)
+    replies: list[str] = []
+
+    class FakeMessage:
+        async def reply_text(self, text: str) -> None:
+            replies.append(text)
+
+    async def run() -> None:
+        await service._handle_clear_request(FakeMessage(), 123, scope="all")
+
+    asyncio.run(run())
+
+    assert calls == [
+        {
+            "project_root": tmp_path,
+            "include_input": True,
+            "include_generated": True,
+            "dry_run": False,
+        }
+    ]
+    assert queue_manager.clear_state_called is True
+    assert replies[-1].startswith("✅ Đã clear workspace.")
 
 
 def test_two_jobs_keep_separate_status_message_ids(tmp_path: Path, monkeypatch) -> None:
