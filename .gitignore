@@ -24,8 +24,10 @@ completed/*
 !completed/.gitkeep
 input/*
 !input/.gitkeep
-!input/telegram/
+input/telegram/*
 !input/telegram/.gitkeep
+secrets/*
+!secrets/.gitkeep
 
 debug-*.log
 video_processing.log
@@ -33,4 +35,3 @@ video_processing.log
 *.part
 
 .env
-

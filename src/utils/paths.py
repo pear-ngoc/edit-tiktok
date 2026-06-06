@@ -15,6 +15,7 @@ REQUIRED_DIRS = [
     "assets/bgm",
     "assets/overlays",
     "data",
+    "secrets",
     "failed",
     "completed",
     "configs",
@@ -44,6 +45,7 @@ def ensure_runtime_dirs(project_root: Path, config: AppConfig | None = None) -> 
         resolve_project_path(project_root, config.audio.bgm_dir).mkdir(parents=True, exist_ok=True)
         resolve_project_path(project_root, config.subtitles.output_dir).mkdir(parents=True, exist_ok=True)
         resolve_project_path(project_root, config.queue.state_file).parent.mkdir(parents=True, exist_ok=True)
+        resolve_project_path(project_root, config.storage.state_file).parent.mkdir(parents=True, exist_ok=True)
         resolve_project_path(project_root, config.telegram.input_subdir).mkdir(parents=True, exist_ok=True)
         if config.queue.move_failed_to:
             resolve_project_path(project_root, config.queue.move_failed_to).mkdir(parents=True, exist_ok=True)

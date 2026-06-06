@@ -38,6 +38,34 @@ telegram:
   message_when_done: "Your video is ready."
   message_when_failed: "Video processing failed."
 
+storage:
+  provider: google_drive
+  keep_local_file: true
+  delete_local_after_upload: true
+  upload_only_final_output: true
+  upload_subtitles: false
+  retry_attempts: 3
+  retry_delay_seconds: 5
+  timeout_seconds: 600
+  max_concurrent_uploads: 2
+  telegram:
+    enabled: false
+    default_chat_id: null
+    send_as_document: true
+    send_caption: true
+    max_file_size_mb: 49
+  google_drive:
+    enabled: true
+    auth_method: oauth
+    credentials_file: "secrets/google-drive-service-account.json"
+    oauth_client_secrets_file: "secrets/google-drive-oauth-client.json"
+    oauth_token_file: "data/google-drive-token.json"
+    folder_id: "15oF1DE6bvxrDCJZ-GjsxgNpyN_rnXnBI"
+    shared_drive_id: ""
+    make_public: true
+    overwrite_existing: false
+    chunk_size_mb: 8
+
 revid_api:
   enabled: true
   api_key: ""
@@ -100,7 +128,7 @@ encoder:
   faststart: true
 
 subtitles:
-  enabled: true
+  enabled: false
   backend: faster-whisper
   model_size: large-v3
   language: auto

@@ -18,6 +18,7 @@ from processing.preflight import (
     run_preflight_checks,
 )
 from queue_manager import QueueManager
+from storage import StorageManager
 from integrations.telegram_bot import TelegramBotService
 from utils.paths import ensure_gitkeep_files, ensure_runtime_dirs, resolve_project_path
 from utils.cleanup import clear_workspace as clear_runtime_workspace
@@ -357,6 +358,105 @@ def clear_workspace(
     print(f"Clear {action} {result.removed_count} thư mục.")
 
 
+def storage_doctor(
+    project_root: Path,
+    *,
+    config_profile: str | None = None,
+    overrides: dict[str, object] | None = None,
+) -> None:
+    config = _load_effective_config(project_root, config_profile=config_profile, overrides=overrides)
+    if config is None:
+        return
+    ensure_runtime_dirs(project_root, config)
+    configure_logging(project_root / "logs", config=config, debug=config.processing.debug_ffmpeg)
+    manager = StorageManager(project_root, config)
+    for line in manager.doctor():
+        print(line)
+
+
+def storage_status(
+    project_root: Path,
+    *,
+    config_profile: str | None = None,
+    overrides: dict[str, object] | None = None,
+) -> None:
+    config = _load_effective_config(project_root, config_profile=config_profile, overrides=overrides)
+    if config is None:
+        return
+    manager = StorageManager(project_root, config)
+    for line in manager.status_lines():
+        print(line)
+
+
+def storage_retry(
+    project_root: Path,
+    *,
+    config_profile: str | None = None,
+    overrides: dict[str, object] | None = None,
+) -> None:
+    config = _load_effective_config(project_root, config_profile=config_profile, overrides=overrides)
+    if config is None:
+        return
+    ensure_runtime_dirs(project_root, config)
+    configure_logging(project_root / "logs", config=config, debug=config.processing.debug_ffmpeg)
+    manager = StorageManager(project_root, config)
+    results = manager.retry_failed_uploads()
+    if not results:
+        print("Không có upload thất bại nào để retry.")
+        return
+    for result in results:
+        status = "OK" if result.success else "FAILED"
+        detail = result.remote_url or result.remote_id or result.error or ""
+        print(f"{status} | {result.provider} | {result.local_path.name} | {detail}")
+
+
+def storage_upload_file(
+    project_root: Path,
+    file_path: Path,
+    *,
+    config_profile: str | None = None,
+    overrides: dict[str, object] | None = None,
+) -> None:
+    config = _load_effective_config(project_root, config_profile=config_profile, overrides=overrides)
+    if config is None:
+        return
+    ensure_runtime_dirs(project_root, config)
+    configure_logging(project_root / "logs", config=config, debug=config.processing.debug_ffmpeg)
+    target = file_path if file_path.is_absolute() else project_root / file_path
+    manager = StorageManager(project_root, config)
+    results = manager.upload_existing_file(target)
+    for result in results:
+        status = "OK" if result.success else "FAILED"
+        detail = result.remote_url or result.remote_id or result.error or ""
+        print(f"{status} | {result.provider} | {target.name} | {detail}")
+
+
+def storage_auth(
+    project_root: Path,
+    *,
+    config_profile: str | None = None,
+    overrides: dict[str, object] | None = None,
+) -> None:
+    config = _load_effective_config(project_root, config_profile=config_profile, overrides=overrides)
+    if config is None:
+        return
+    ensure_runtime_dirs(project_root, config)
+    configure_logging(project_root / "logs", config=config, debug=config.processing.debug_ffmpeg)
+    if (config.storage.google_drive.auth_method or "").strip().lower() != "oauth":
+        print("storage auth chỉ dùng cho storage.google_drive.auth_method: oauth")
+        return
+    try:
+        from storage.google_drive import authorize_oauth
+
+        token_path = authorize_oauth(project_root, config.storage.google_drive)
+    except Exception as exc:
+        LOGGER.error("Google Drive OAuth auth thất bại: %s", exc)
+        print(f"Không tạo được Google Drive OAuth token: {exc}")
+        return
+    display = token_path.relative_to(project_root) if token_path.is_relative_to(project_root) else token_path
+    print(f"Đã lưu Google Drive OAuth token: {display}")
+
+
 def _configure_subtitles_interactively(config: AppConfig) -> None:
     raw = input("Burn captions into the video? [y/N]: ").strip().lower()
     if raw in {"y", "yes", "true", "1"}:
@@ -574,6 +674,7 @@ def _run_queue_runtime(
     if telegram_active:
         telegram_service = TelegramBotService(project_root, config, queue_manager)
         queue_manager.notifier = telegram_service
+    queue_manager.storage_manager = StorageManager(project_root, config, telegram_sender=telegram_service)
 
     workers = max(1, int(config.queue.max_workers))
     print(

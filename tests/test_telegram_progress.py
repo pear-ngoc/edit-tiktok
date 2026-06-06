@@ -164,7 +164,7 @@ def test_same_message_used_for_queue_processing_and_subtitles(tmp_path: Path, mo
     ]
 
 
-def test_completion_sends_one_document_and_edits_original_status(tmp_path: Path, monkeypatch) -> None:
+def test_storage_send_uses_one_document_and_existing_runtime(tmp_path: Path, monkeypatch) -> None:
     service, queue_manager = _make_service(tmp_path, monkeypatch)
     output = tmp_path / "output.mp4"
     output.write_bytes(b"x" * 1024)
@@ -187,12 +187,11 @@ def test_completion_sends_one_document_and_edits_original_status(tmp_path: Path,
     monkeypatch.setattr(service, "_edit_status_message_sync", lambda _job, text: edits.append(text) or True)
     monkeypatch.setattr(service, "_send_document", lambda chat_id, file_path, *, caption: sent.append((chat_id, file_path, caption)) or True)
 
-    service.on_job_completed(job, ProcessResult(Path(job.input_path), output, True, 3.2))
+    assert service.update_storage_status(job.job_id, "📤 Đang tải output lên Telegram...") is True
+    assert service.send_storage_document(333, output, caption="caption") is True
 
-    assert sent == [(333, output, sent[0][2])]
-    assert edits[0] == "📤 Xử lý hoàn tất, đang gửi video..."
-    assert edits[-1].startswith("✅ Hoàn tất")
-    assert "output.mp4" in edits[-1]
+    assert sent == [(333, output, "caption")]
+    assert edits == ["📤 Đang tải output lên Telegram..."]
 
 
 def test_failure_edits_original_status_without_sending_new_message(tmp_path: Path, monkeypatch) -> None:
@@ -219,7 +218,7 @@ def test_failure_edits_original_status_without_sending_new_message(tmp_path: Pat
     assert edits[0].startswith("❌ Xử lý thất bại")
 
 
-def test_edit_failure_does_not_fail_processing_job(tmp_path: Path, monkeypatch) -> None:
+def test_completion_status_edit_failure_does_not_fail_processing_job(tmp_path: Path, monkeypatch) -> None:
     service, queue_manager = _make_service(tmp_path, monkeypatch)
     output = tmp_path / "output.mp4"
     output.write_bytes(b"x")
@@ -242,8 +241,8 @@ def test_edit_failure_does_not_fail_processing_job(tmp_path: Path, monkeypatch) 
 
     service.on_job_completed(job, ProcessResult(Path(job.input_path), output, True, 1.0))
 
-    assert sent
-    assert edits[0] == "📤 Xử lý hoàn tất, đang gửi video..."
+    assert sent == []
+    assert edits and edits[0].startswith("✅ Hoàn tất")
 
 
 def test_worker_thread_bridge_uses_run_coroutine_threadsafe(tmp_path: Path, monkeypatch) -> None:

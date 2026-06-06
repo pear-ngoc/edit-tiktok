@@ -366,6 +366,129 @@ telegram:
 Ba field này giúp ứng dụng trỏ sang service `telegram-bot-api` trong `docker-compose.yml`. Ở chế độ local, bot có thể upload file lớn hơn so với `api.telegram.org`, miễn là server local và tài nguyên máy cho phép. Mình đã mount `./output:/app/output:ro` vào service này để nó đọc file render trực tiếp từ volume dùng chung, tối ưu hơn cho video lớn.
 Service `telegram-bot-api` còn cần `TELEGRAM_API_ID` và `TELEGRAM_API_HASH` lấy từ `https://my.telegram.org`.
 
+### Lưu trữ và gửi output sau render
+
+Sau khi render thành công, app có thể giữ file local, gửi Telegram, upload Google Drive, hoặc làm cả hai qua `storage.provider`:
+
+```yaml
+storage:
+  provider: local
+```
+
+Giá trị hỗ trợ là `local`, `telegram`, `google_drive`, `both`. Provider lạ sẽ bị từ chối khi đọc config. `local` giữ nguyên hành vi local-only: file nằm trong `output/`, không gọi API remote.
+
+Nếu bật burn caption, file cuối cùng được upload là bản `_burned.mp4` đã render thành công. App không upload segment tạm, audio tạm, ảnh caption PNG, file rỗng hoặc output mà `ffprobe` không đọc được.
+
+Ví dụ Google Drive:
+
+```yaml
+storage:
+  provider: google_drive
+  keep_local_file: true
+  delete_local_after_upload: false
+
+  google_drive:
+    enabled: true
+    auth_method: oauth
+    oauth_client_secrets_file: "secrets/google-drive-oauth-client.json"
+    oauth_token_file: "data/google-drive-token.json"
+    folder_id: "YOUR_FOLDER_ID"
+    shared_drive_id: ""
+    make_public: false
+```
+
+Ví dụ gửi cả Telegram và Google Drive:
+
+```yaml
+storage:
+  provider: both
+
+  telegram:
+    enabled: true
+    default_chat_id: 123456789
+    max_file_size_mb: 49
+
+  google_drive:
+    enabled: true
+    auth_method: oauth
+    oauth_client_secrets_file: "secrets/google-drive-oauth-client.json"
+    oauth_token_file: "data/google-drive-token.json"
+    folder_id: "YOUR_FOLDER_ID"
+    make_public: false
+```
+
+Routing Telegram:
+
+- Job đến từ Telegram luôn gửi output về đúng `chat_id` đã gửi link TikTok.
+- Job local trong `input/` dùng `storage.telegram.default_chat_id` khi `provider: telegram` hoặc `both`.
+- Nếu local job thiếu `default_chat_id`, upload Telegram thất bại rõ ràng nhưng file local vẫn được giữ.
+- Mặc định gửi bằng document để giữ chất lượng video.
+
+Google Drive hỗ trợ 2 kiểu xác thực:
+
+- `service_account`: phù hợp server/Shared Drive hoặc folder đã share cho service account.
+- `oauth`: phù hợp Gmail cá nhân, My Drive cá nhân, không cần Shared Drive.
+
+Với Gmail cá nhân, dùng OAuth:
+
+```yaml
+storage:
+  provider: google_drive
+  keep_local_file: true
+  delete_local_after_upload: false
+
+  google_drive:
+    enabled: true
+    auth_method: oauth
+    oauth_client_secrets_file: "secrets/google-drive-oauth-client.json"
+    oauth_token_file: "data/google-drive-token.json"
+    folder_id: "YOUR_FOLDER_ID"
+    shared_drive_id: ""
+    make_public: false
+```
+
+Tạo OAuth Client ID dạng Desktop app trong Google Cloud, tải JSON về `secrets/google-drive-oauth-client.json`, rồi chạy một lần:
+
+```bash
+python main.py storage auth
+```
+
+Lệnh này mở trình duyệt để bạn đăng nhập Gmail, sau đó lưu token vào `data/google-drive-token.json`. Token nằm trong `data/` để Docker/worker có thể refresh token khi cần, và thư mục `data/` đã được gitignore.
+
+Với service account, tạo service-account JSON trong Google Cloud, đặt file vào `secrets/google-drive-service-account.json`, rồi share folder Drive đích cho email service account. `storage.google_drive.folder_id` là ID folder Drive, không phải đường dẫn local. Nếu dùng Shared Drive, điền thêm `shared_drive_id` và đảm bảo service account có quyền trong Shared Drive đó.
+
+Mặc định `make_public: false`, file upload lên Drive vẫn private. Nếu đặt `make_public: true`, app chỉ tạo quyền link-view sau khi upload thành công. Nếu tạo public link lỗi, file private đã upload vẫn được giữ và app không upload lại lần hai.
+
+File local không bị xoá trừ khi:
+
+```yaml
+storage:
+  delete_local_after_upload: true
+```
+
+và toàn bộ provider được cấu hình đều upload thành công. Với `provider: both`, chỉ cần Telegram hoặc Drive lỗi là output local vẫn được giữ.
+
+CLI ghi đè nhanh:
+
+```bash
+python main.py process --storage local
+python main.py process --storage telegram --telegram-chat-id 123456789
+python main.py process --storage google_drive --drive-folder-id YOUR_FOLDER_ID
+python main.py process --storage both --telegram-chat-id 123456789 --drive-folder-id YOUR_FOLDER_ID
+```
+
+Lệnh storage-only:
+
+```bash
+python main.py storage doctor
+python main.py storage auth
+python main.py storage upload output/example.mp4
+python main.py storage retry
+python main.py storage status
+```
+
+Các alias tương đương: `storage-doctor`, `storage-auth`, `upload-file`, `retry-uploads`, `storage-status`. Trạng thái upload được lưu trong `data/storage_uploads.json`, nên app không gửi lại file đã upload thành công sau khi restart. Nếu upload lỗi, job chuyển sang `upload_failed`; video đã render vẫn còn và có thể retry mà không render lại.
+
 ### Chạy worker nền đầy đủ
 
 ```bash
@@ -424,6 +547,11 @@ TELEGRAM_BOT_API_BASE_URL=
 TELEGRAM_BOT_API_FILE_URL=
 TELEGRAM_BOT_API_LOCAL_MODE=
 REVID_API_KEY=
+GOOGLE_APPLICATION_CREDENTIALS=/app/secrets/google-drive-service-account.json
+GOOGLE_DRIVE_FOLDER_ID=
+GOOGLE_DRIVE_AUTH_METHOD=
+GOOGLE_OAUTH_CLIENT_SECRETS_FILE=/app/secrets/google-drive-oauth-client.json
+GOOGLE_OAUTH_TOKEN_FILE=/app/data/google-drive-token.json
 ```
 
 Container mặc định chạy:
@@ -440,9 +568,12 @@ Các volume được mount:
 - `./configs:/app/configs`
 - `./logs:/app/logs`
 - `./data:/app/data`
+- `./secrets:/app/secrets:ro`
 - `./config.yaml:/app/config.yaml`
 
 Compose hiện có thêm service `telegram-bot-api` chạy từ image `ghcr.io/bots-house/docker-telegram-bot-api`. Service này dùng để self-host Telegram Bot API khi bạn muốn upload file lớn hơn giới hạn 50 MB của API công khai.
+
+Google credentials không được bake vào image. OAuth client JSON hoặc service-account JSON nằm trong `./secrets:/app/secrets:ro`; OAuth token nằm trong `./data:/app/data` để refresh được. Nếu Drive storage tắt, app vẫn khởi động bình thường dù chưa có file secrets.
 
 Để cache model `faster-whisper` không bị tải lại sau khi recreate container, `edit-tiktok` đã mount thêm:
 

@@ -24,6 +24,9 @@ from models import (
     QueueConfig,
     NvidiaConfig,
     RevidAPIConfig,
+    StorageConfig,
+    StorageGoogleDriveConfig,
+    StorageTelegramConfig,
     VaapiConfig,
     TelegramConfig,
     SubtitlesConfig,
@@ -38,6 +41,7 @@ LOGGER = logging.getLogger(__name__)
 
 CONFIG_FILENAME = "config.yaml"
 EXAMPLE_CONFIG_FILENAME = "config.example.yaml"
+SUPPORTED_STORAGE_PROVIDERS = {"local", "telegram", "google_drive", "both"}
 
 
 def default_config() -> AppConfig:
@@ -101,6 +105,7 @@ def _load_raw_config(path: Path) -> dict[str, Any]:
 
 
 def config_from_dict(data: dict[str, Any]) -> AppConfig:
+    storage = _storage_section(data.get("storage", {}))
     return AppConfig(
         processing=_section(ProcessingConfig, data.get("processing", {}), section_name="processing"),
         queue=_section(QueueConfig, data.get("queue", {}), section_name="queue"),
@@ -111,6 +116,7 @@ def config_from_dict(data: dict[str, Any]) -> AppConfig:
         encoder=_section(EncoderConfig, data.get("encoder", {}), section_name="encoder"),
         subtitles=_section(SubtitlesConfig, data.get("subtitles", {}), section_name="subtitles"),
         telegram=_section(TelegramConfig, data.get("telegram", {}), section_name="telegram"),
+        storage=storage,
         revid_api=_section(RevidAPIConfig, data.get("revid_api", {}), section_name="revid_api"),
         formatting=_section(FormattingConfig, data.get("formatting", {}), section_name="formatting"),
         runtime=_section(RuntimeConfig, data.get("runtime", {}), section_name="runtime"),
@@ -154,6 +160,9 @@ def apply_overrides(config: AppConfig, overrides: dict[str, Any]) -> AppConfig:
         "retain_failed_temp": ("logging", "retain_failed_temp"),
         "progress_interval_seconds": ("logging", "progress_interval_seconds"),
         "show_runtime_plan": ("logging", "show_runtime_plan"),
+        "storage": ("storage", "provider"),
+        "telegram_chat_id": ("storage", "telegram", "default_chat_id"),
+        "drive_folder_id": ("storage", "google_drive", "folder_id"),
     }
     if overrides.get("no_lut"):
         data["color"]["lut_enabled"] = False
@@ -172,15 +181,22 @@ def apply_overrides(config: AppConfig, overrides: dict[str, Any]) -> AppConfig:
     for key, value in overrides.items():
         if value is None or key not in mapping:
             continue
-        section, field_name = mapping[key]
+        mapping_value = mapping[key]
+        section = mapping_value[0]
         if key == "lut":
+            field_name = mapping_value[1]
             data[section][field_name] = list(value)
             data["color"]["lut_enabled"] = True
+        elif len(mapping_value) == 3:
+            _, nested_section, field_name = mapping_value
+            data[section][nested_section][field_name] = value
         elif key in {"subtitle_language", "whisper_model"}:
+            field_name = mapping_value[1]
             data[section][field_name] = value
             if key == "subtitle_language":
                 data["subtitles"]["burn_language"] = value
         else:
+            field_name = mapping_value[1]
             data[section][field_name] = value
     if "subtitle_language" in overrides:
         data["subtitles"]["language"] = overrides["subtitle_language"] or "auto"
@@ -219,6 +235,11 @@ def apply_environment_overrides(config: AppConfig) -> AppConfig:
     telegram_api_file_url = os.getenv("TELEGRAM_BOT_API_FILE_URL", "").strip()
     telegram_local_mode = os.getenv("TELEGRAM_BOT_API_LOCAL_MODE", "").strip().lower()
     revid_key = os.getenv("REVID_API_KEY", "").strip()
+    google_credentials = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "").strip()
+    google_drive_folder_id = os.getenv("GOOGLE_DRIVE_FOLDER_ID", "").strip()
+    google_drive_auth_method = os.getenv("GOOGLE_DRIVE_AUTH_METHOD", "").strip()
+    google_oauth_client = os.getenv("GOOGLE_OAUTH_CLIENT_SECRETS_FILE", "").strip()
+    google_oauth_token = os.getenv("GOOGLE_OAUTH_TOKEN_FILE", "").strip()
     if telegram_token and not data["telegram"].get("bot_token"):
         data["telegram"]["bot_token"] = telegram_token
     if telegram_api_base_url and not data["telegram"].get("api_base_url"):
@@ -229,6 +250,16 @@ def apply_environment_overrides(config: AppConfig) -> AppConfig:
         data["telegram"]["local_mode"] = True
     if revid_key and not data["revid_api"].get("api_key"):
         data["revid_api"]["api_key"] = revid_key
+    if google_credentials and not data["storage"]["google_drive"].get("credentials_file"):
+        data["storage"]["google_drive"]["credentials_file"] = google_credentials
+    if google_drive_folder_id and not data["storage"]["google_drive"].get("folder_id"):
+        data["storage"]["google_drive"]["folder_id"] = google_drive_folder_id
+    if google_drive_auth_method:
+        data["storage"]["google_drive"]["auth_method"] = google_drive_auth_method
+    if google_oauth_client:
+        data["storage"]["google_drive"]["oauth_client_secrets_file"] = google_oauth_client
+    if google_oauth_token:
+        data["storage"]["google_drive"]["oauth_token_file"] = google_oauth_token
     return config_from_dict(data)
 
 
@@ -328,6 +359,30 @@ def _section(cls: type[T], data: dict[str, Any], *, section_name: str = "") -> T
         )
     filtered = {key: value for key, value in data.items() if key in allowed}
     return cls(**filtered)
+
+
+def _storage_section(data: dict[str, Any]) -> StorageConfig:
+    raw = data or {}
+    base = {key: value for key, value in raw.items() if key not in {"telegram", "google_drive"}}
+    provider = str(base.get("provider", "local")).strip().lower()
+    if provider not in SUPPORTED_STORAGE_PROVIDERS:
+        supported = ", ".join(sorted(SUPPORTED_STORAGE_PROVIDERS))
+        raise ValueError(f"storage.provider không hợp lệ: {provider!r}. Giá trị hỗ trợ: {supported}.")
+    base["provider"] = provider
+    telegram = _section(
+        StorageTelegramConfig,
+        raw.get("telegram", {}),
+        section_name="storage.telegram",
+    )
+    google_drive = _section(
+        StorageGoogleDriveConfig,
+        raw.get("google_drive", {}),
+        section_name="storage.google_drive",
+    )
+    config = _section(StorageConfig, base, section_name="storage")
+    config.telegram = telegram
+    config.google_drive = google_drive
+    return config
 
 
 def _parse_scalar(value: str) -> Any:

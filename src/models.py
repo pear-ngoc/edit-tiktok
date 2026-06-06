@@ -167,6 +167,45 @@ class TelegramConfig:
 
 
 @dataclass(slots=True)
+class StorageTelegramConfig:
+    enabled: bool = False
+    default_chat_id: int | None = None
+    send_as_document: bool = True
+    send_caption: bool = True
+    max_file_size_mb: int = 49
+
+
+@dataclass(slots=True)
+class StorageGoogleDriveConfig:
+    enabled: bool = False
+    auth_method: str = "service_account"
+    credentials_file: str = "secrets/google-drive-service-account.json"
+    oauth_client_secrets_file: str = "secrets/google-drive-oauth-client.json"
+    oauth_token_file: str = "data/google-drive-token.json"
+    folder_id: str = ""
+    shared_drive_id: str = ""
+    make_public: bool = False
+    overwrite_existing: bool = False
+    chunk_size_mb: int = 8
+
+
+@dataclass(slots=True)
+class StorageConfig:
+    provider: str = "local"
+    keep_local_file: bool = True
+    delete_local_after_upload: bool = False
+    upload_only_final_output: bool = True
+    upload_subtitles: bool = False
+    retry_attempts: int = 3
+    retry_delay_seconds: float = 5.0
+    timeout_seconds: int = 600
+    max_concurrent_uploads: int = 2
+    state_file: str = "data/storage_uploads.json"
+    telegram: StorageTelegramConfig = field(default_factory=StorageTelegramConfig)
+    google_drive: StorageGoogleDriveConfig = field(default_factory=StorageGoogleDriveConfig)
+
+
+@dataclass(slots=True)
 class RevidAPIConfig:
     enabled: bool = True
     api_key: str = ""
@@ -224,6 +263,7 @@ class AppConfig:
     encoder: EncoderConfig = field(default_factory=EncoderConfig)
     subtitles: SubtitlesConfig = field(default_factory=SubtitlesConfig)
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
     revid_api: RevidAPIConfig = field(default_factory=RevidAPIConfig)
     formatting: FormattingConfig = field(default_factory=FormattingConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
@@ -265,7 +305,10 @@ class JobStatus(str, Enum):
     DOWNLOADING = "downloading"
     QUEUED = "queued"
     PROCESSING = "processing"
+    RENDERED = "rendered"
+    UPLOADING = "uploading"
     COMPLETED = "completed"
+    UPLOAD_FAILED = "upload_failed"
     FAILED = "failed"
 
 

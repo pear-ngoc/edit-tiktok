@@ -15,6 +15,10 @@ dependencies = [
     "faster-whisper>=1.0.0",
     "python-telegram-bot>=21.0",
     "Pillow>=10.0.0",
+    "google-api-python-client>=2.170.0",
+    "google-auth>=2.40.0",
+    "google-auth-httplib2>=0.2.0",
+    "google-auth-oauthlib>=1.2.0",
 ]
 
 [project.optional-dependencies]
@@ -34,7 +38,7 @@ py-modules = ["cli", "app", "config", "logging_config", "models", "queue_manager
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["ffmpeg_tools*", "processing*", "utils*", "integrations*"]
+include = ["ffmpeg_tools*", "processing*", "utils*", "integrations*", "storage*"]
 
 [tool.ruff]
 line-length = 100

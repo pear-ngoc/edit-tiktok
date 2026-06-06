@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol
 
 from models import AppConfig, JobSource, JobStatus, ProcessResult, VideoJob
+from storage import StorageManager, StorageUploadResult
 from utils.files import find_video_files, safe_output_path, sanitize_filename
 from utils.paths import resolve_project_path
 from utils.runtime_logging import build_job_runtime_context, job_context_scope
@@ -45,11 +46,13 @@ class QueueManager:
         process_callback: ProcessCallback,
         *,
         notifier: QueueEventSink | None = None,
+        storage_manager: StorageManager | None = None,
     ) -> None:
         self.project_root = project_root
         self.config = config
         self.process_callback = process_callback
         self.notifier = notifier
+        self.storage_manager = storage_manager
         self.input_root = resolve_project_path(project_root, config.processing.input_dir)
         self.output_root = resolve_project_path(project_root, config.processing.output_dir)
         self.temp_root = resolve_project_path(project_root, config.processing.temp_dir)
@@ -305,11 +308,22 @@ class QueueManager:
                         if result.output and result.output.exists():
                             self._set_status(
                                 job.job_id,
-                                JobStatus.COMPLETED,
-                                completed_at=utc_now_iso(),
+                                JobStatus.RENDERED,
                                 output_path=str(result.output),
                                 output_size=result.output.stat().st_size,
                                 error=None,
+                            )
+                            storage_results = self._deliver_rendered_output(job.job_id, result.output)
+                            final_status = (
+                                JobStatus.COMPLETED
+                                if all(item.success for item in storage_results)
+                                else JobStatus.UPLOAD_FAILED
+                            )
+                            self._set_status(
+                                job.job_id,
+                                final_status,
+                                completed_at=utc_now_iso(),
+                                error=None if final_status == JobStatus.COMPLETED else _storage_error_summary(storage_results),
                             )
                         elif result.success:
                             self._set_status(
@@ -329,7 +343,9 @@ class QueueManager:
                             result.elapsed_seconds,
                         )
                         self._log_queue_snapshot(prefix=f"WORKER {worker_slot}/{worker_total}")
-                        self._safe_notify("on_job_completed", self.load_job(job.job_id) or job, result)
+                        current_job = self.load_job(job.job_id) or job
+                        if current_job.status == JobStatus.COMPLETED:
+                            self._safe_notify("on_job_completed", current_job, result)
                     except Exception as exc:  # pragma: no cover - safety net
                         LOGGER.exception("Job thất bại: %s", job.job_id)
                         self._set_status(
@@ -398,7 +414,29 @@ class QueueManager:
 
     def _has_active_processing(self) -> bool:
         with self._lock:
-            return any(job.status == JobStatus.PROCESSING for job in self._jobs.values())
+            return any(job.status in {JobStatus.PROCESSING, JobStatus.UPLOADING} for job in self._jobs.values())
+
+    def _deliver_rendered_output(self, job_id: str, output_path: Path) -> list[StorageUploadResult]:
+        job = self.load_job(job_id)
+        if job is None:
+            return []
+        if self.config.storage.provider == "local":
+            return []
+        if self.storage_manager is None:
+            return [
+                StorageUploadResult(
+                    provider=self.config.storage.provider,
+                    success=False,
+                    local_path=output_path,
+                    error="Storage manager chưa được cấu hình.",
+                    permanent=True,
+                )
+            ]
+        self._set_status(job_id, JobStatus.UPLOADING)
+        self._safe_notify("on_job_stage", job, "uploading", _storage_start_text(self.config.storage.provider))
+        results = self.storage_manager.upload_final_output(output_path, job, self.config)
+        self._safe_notify("on_job_stage", self.load_job(job_id) or job, "uploading", _storage_final_text(results))
+        return results
 
     def _set_status(self, job_id: str, status: JobStatus, **changes: Any) -> None:
         with self._lock:
@@ -451,10 +489,10 @@ class QueueManager:
 
     def _queue_snapshot(self) -> dict[str, int]:
         with self._lock:
-            active = sum(1 for job in self._jobs.values() if job.status == JobStatus.PROCESSING)
+            active = sum(1 for job in self._jobs.values() if job.status in {JobStatus.PROCESSING, JobStatus.UPLOADING})
             waiting = sum(1 for job in self._jobs.values() if job.status in {JobStatus.PENDING, JobStatus.QUEUED})
             completed = sum(1 for job in self._jobs.values() if job.status == JobStatus.COMPLETED)
-            failed = sum(1 for job in self._jobs.values() if job.status == JobStatus.FAILED)
+            failed = sum(1 for job in self._jobs.values() if job.status in {JobStatus.FAILED, JobStatus.UPLOAD_FAILED})
         return {"active": active, "waiting": waiting, "completed": completed, "failed": failed}
 
     def _load_state(self) -> None:
@@ -563,3 +601,32 @@ def job_from_dict(data: dict[str, Any]) -> VideoJob:
 def sanitize_download_filename(uploader: str, job_id: str) -> str:
     safe_uploader = sanitize_filename(uploader or "tiktok")
     return f"tiktok_{safe_uploader}_{job_id}.mp4"
+
+
+def _storage_start_text(provider: str) -> str:
+    if provider == "telegram":
+        return "📤 Đang tải output lên Telegram..."
+    if provider == "google_drive":
+        return "☁️ Đang tải output lên Google Drive..."
+    if provider == "both":
+        return "📤 Đang gửi video lên Telegram...\n☁️ Đang tải bản sao lên Google Drive..."
+    return ""
+
+
+def _storage_final_text(results: list[StorageUploadResult]) -> str:
+    if not results:
+        return "✅ Hoàn tất"
+    lines = ["✅ Upload hoàn tất" if all(item.success for item in results) else "⚠️ Render hoàn tất", ""]
+    for item in results:
+        label = "Telegram" if item.provider == "telegram" else "Google Drive" if item.provider == "google_drive" else item.provider
+        lines.append(f"{label}: {'đã upload' if item.success else 'upload thất bại'}")
+        if item.provider == "google_drive" and item.remote_url:
+            lines.append(f"Drive: {item.remote_url}")
+    if not all(item.success for item in results):
+        lines.append("Video local vẫn được giữ lại.")
+    return "\n".join(lines)
+
+
+def _storage_error_summary(results: list[StorageUploadResult]) -> str:
+    failed = [f"{item.provider}: {item.error or 'upload failed'}" for item in results if not item.success]
+    return "; ".join(failed) or None

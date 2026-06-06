@@ -77,6 +77,42 @@ def main(argv: Sequence[str] | None = None) -> None:
             config_profile=global_options["config_profile"],
             skip_preflight=global_options["skip_preflight"],
         )
+    elif command == "storage":
+        _handle_storage_command(project_root, rest, global_options)
+    elif command == "storage-doctor":
+        app.storage_doctor(
+            project_root,
+            config_profile=global_options["config_profile"],
+            overrides=global_options["overrides"],
+        )
+    elif command == "upload-file":
+        if not rest:
+            print("Thiếu đường dẫn file upload.")
+            raise SystemExit(2)
+        app.storage_upload_file(
+            project_root,
+            Path(rest[0]),
+            config_profile=global_options["config_profile"],
+            overrides=global_options["overrides"],
+        )
+    elif command == "retry-uploads":
+        app.storage_retry(
+            project_root,
+            config_profile=global_options["config_profile"],
+            overrides=global_options["overrides"],
+        )
+    elif command == "storage-status":
+        app.storage_status(
+            project_root,
+            config_profile=global_options["config_profile"],
+            overrides=global_options["overrides"],
+        )
+    elif command == "storage-auth":
+        app.storage_auth(
+            project_root,
+            config_profile=global_options["config_profile"],
+            overrides=global_options["overrides"],
+        )
     elif command == "configs":
         _handle_configs_command(project_root, rest)
     elif command == "list-configs":
@@ -122,7 +158,7 @@ def _root_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        help="Lệnh: init, doctor, list-luts, list-fonts, preflight, process, wizard, watch, telegram, worker, clear, configs, list-configs, show-config, use-config",
+        help="Lệnh: init, doctor, list-luts, list-fonts, preflight, process, wizard, watch, telegram, worker, storage, clear, configs, list-configs, show-config, use-config",
     )
     return parser
 
@@ -199,6 +235,51 @@ def _handle_configs_command(project_root: Path, rest: list[str]) -> None:
         app.show_config(project_root, rest[1])
     else:
         print(f"Lệnh con không hợp lệ: {subcommand}", file=sys.stderr)
+        raise SystemExit(2)
+
+
+def _handle_storage_command(project_root: Path, rest: list[str], global_options: dict[str, object]) -> None:
+    if not rest:
+        print("Thiếu lệnh storage: doctor, auth, upload, retry, status.")
+        raise SystemExit(2)
+    subcommand = rest[0]
+    overrides = global_options["overrides"]
+    if subcommand == "doctor":
+        app.storage_doctor(
+            project_root,
+            config_profile=global_options["config_profile"],
+            overrides=overrides,
+        )
+    elif subcommand == "upload":
+        if len(rest) < 2:
+            print("Thiếu đường dẫn file upload.")
+            raise SystemExit(2)
+        app.storage_upload_file(
+            project_root,
+            Path(rest[1]),
+            config_profile=global_options["config_profile"],
+            overrides=overrides,
+        )
+    elif subcommand == "retry":
+        app.storage_retry(
+            project_root,
+            config_profile=global_options["config_profile"],
+            overrides=overrides,
+        )
+    elif subcommand == "status":
+        app.storage_status(
+            project_root,
+            config_profile=global_options["config_profile"],
+            overrides=overrides,
+        )
+    elif subcommand == "auth":
+        app.storage_auth(
+            project_root,
+            config_profile=global_options["config_profile"],
+            overrides=overrides,
+        )
+    else:
+        print(f"Lệnh storage không hợp lệ: {subcommand}", file=sys.stderr)
         raise SystemExit(2)
 
 
@@ -306,6 +387,23 @@ def _process_parser() -> argparse.ArgumentParser:
         dest="no_lut",
         action="store_true",
         help="Tắt toàn bộ LUT",
+    )
+    parser.add_argument(
+        "--storage",
+        dest="storage",
+        choices=["local", "telegram", "google_drive", "both"],
+        help="Provider lưu/gửi output sau render",
+    )
+    parser.add_argument(
+        "--telegram-chat-id",
+        dest="telegram_chat_id",
+        type=int,
+        help="Chat ID mặc định cho local job khi storage telegram/both",
+    )
+    parser.add_argument(
+        "--drive-folder-id",
+        dest="drive_folder_id",
+        help="Google Drive folder ID cho storage google_drive/both",
     )
     return parser
 

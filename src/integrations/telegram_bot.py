@@ -29,6 +29,8 @@ _STAGE_TEXTS = {
     "generating_subtitles": lambda job, *_: "📝 Đang tạo phụ đề...",
     "burning_subtitles": lambda job, *_: "🔥 Đang burn phụ đề vào video...",
     "sending": lambda job, *_: "📤 Xử lý hoàn tất, đang gửi video...",
+    "uploading_telegram": lambda job, *_: "📤 Đang tải output lên Telegram...",
+    "uploading_drive": lambda job, *_: "☁️ Đang tải output lên Google Drive...",
     "completed": lambda job, output_path=None, *_: f"✅ Hoàn tất\n📁 {(output_path or Path(job.output_path or '')).name}",
     "failed": lambda job, _output_path=None, error=None: f"❌ Xử lý thất bại\nLỗi: {error or 'Không xác định'}",
 }
@@ -112,53 +114,11 @@ class TelegramBotService:
         self._edit_status_message_sync(job, text or self._stage_text(job, stage))
 
     def on_job_completed(self, job: VideoJob, result: ProcessResult) -> None:
-        if (
-            job.chat_id is None
-            or job.source != JobSource.TELEGRAM_TIKTOK
-            or not self.telegram_config.edit_progress_message
-        ):
+        if self.config.storage.provider != "local":
             return
         output_path = result.output or (Path(job.output_path) if job.output_path else None)
-        if not output_path or not output_path.exists():
-            self._edit_status_message_sync(job, self._stage_text(job, "failed", error="Không tìm thấy file đầu ra."))
-            return
-        if not self.telegram_config.send_output_video:
+        if output_path and output_path.exists() and job.source == JobSource.TELEGRAM_TIKTOK:
             self._edit_status_message_sync(job, self._stage_text(job, "completed", output_path=output_path))
-            LOGGER.info("Telegram output không gửi vì send_output_video=false | job_id=%s", job.job_id)
-            return
-        self._edit_status_message_sync(job, self._stage_text(job, "sending"))
-        max_bytes = int(self._effective_telegram_upload_limit_mb()) * 1024 * 1024
-        size = output_path.stat().st_size
-        if size > max_bytes:
-            self._edit_status_message_sync(
-                job,
-                (
-                    "⚠️ Video đã xử lý xong nhưng vượt quá giới hạn gửi của bot.\n"
-                    f"Dung lượng: {size / (1024 * 1024):.1f} MB"
-                ),
-            )
-            LOGGER.warning(
-                "Output quá lớn để gửi Telegram | job_id=%s | path=%s | size_mb=%.1f | limit_mb=%s",
-                job.job_id,
-                output_path,
-                size / (1024 * 1024),
-                self._effective_telegram_upload_limit_mb(),
-            )
-            return
-        caption = self._build_caption(job, output_path)
-        sent = self._send_document(job.chat_id, output_path, caption=caption)
-        if sent:
-            self._edit_status_message_sync(job, self._stage_text(job, "completed", output_path=output_path))
-            LOGGER.info("Đã gửi output cho chat_id=%s | job_id=%s", job.chat_id, job.job_id)
-        else:
-            safe_error = "Không gửi được video Telegram."
-            self._edit_status_message_sync(job, self._stage_text(job, "failed", error=safe_error))
-            LOGGER.warning(
-                "Không xác nhận được việc gửi output Telegram | chat_id=%s | job_id=%s | file=%s",
-                job.chat_id,
-                job.job_id,
-                output_path,
-            )
 
     def on_job_failed(self, job: VideoJob, error: str) -> None:
         if (
@@ -464,6 +424,15 @@ class TelegramBotService:
                 return False
             LOGGER.exception("Không gửi được video Telegram | chat_id=%s | file=%s", chat_id, file_path)
             return False
+
+    def send_storage_document(self, chat_id: int, file_path: Path, *, caption: str) -> bool:
+        return self._send_document(chat_id, file_path, caption=caption)
+
+    def update_storage_status(self, job_id: str, text: str) -> bool:
+        job = self.queue_manager.load_job(job_id)
+        if job is None:
+            return False
+        return self._edit_status_message_sync(job, text)
 
     def _stage_text(
         self,

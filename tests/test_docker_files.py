@@ -17,3 +17,11 @@ def test_docker_compose_includes_telegram_bot_api_service() -> None:
     assert "TELEGRAM_BOT_API_BASE_URL" in compose
     assert "TELEGRAM_BOT_API_FILE_URL" in compose
     assert "./output:/app/output:ro" in compose
+
+
+def test_docker_compose_mounts_google_drive_credentials_read_only() -> None:
+    root = Path(__file__).resolve().parent.parent
+    compose = (root / "docker-compose.yml").read_text(encoding="utf-8")
+    assert "GOOGLE_APPLICATION_CREDENTIALS" in compose
+    assert "GOOGLE_DRIVE_FOLDER_ID" in compose
+    assert "./secrets:/app/secrets:ro" in compose

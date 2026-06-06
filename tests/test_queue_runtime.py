@@ -149,7 +149,7 @@ def test_revid_download_direct_fallback() -> None:
     assert select_download_url(payload) == "https://example.com/direct.mp4"
 
 
-def test_telegram_access_control_and_completion_delivery(tmp_path: Path, monkeypatch) -> None:
+def test_telegram_access_control_and_storage_delivery(tmp_path: Path, monkeypatch) -> None:
     config = default_config()
     config.telegram.allowed_chat_ids = [111, 222]
     config.telegram.allow_all_chats_if_empty = True
@@ -185,9 +185,8 @@ def test_telegram_access_control_and_completion_delivery(tmp_path: Path, monkeyp
         chat_id=999,
         original_url="https://www.tiktok.com/@user/video/1",
     )
-    result = ProcessResult(Path(job.input_path), output, True, 1.2)
-    service.on_job_completed(job, result)
+    assert service.send_storage_document(job.chat_id or 0, output, caption="caption") is True
 
     assert sent["chat_id"] == 999
     assert sent["path"] == output
-    assert "https://www.tiktok.com/@user/video/1" in str(sent["caption"])
+    assert sent["caption"] == "caption"

@@ -5,9 +5,10 @@ import logging
 import os
 from pathlib import Path
 
-from models import AppConfig, PreflightBatchResult, ProcessResult
+from models import AppConfig, JobSource, JobStatus, PreflightBatchResult, ProcessResult, VideoJob
 from processing.pipeline import process_video
 from processing.lut import resolve_lut_selection
+from storage import StorageManager
 from utils.files import find_video_files
 from utils.runtime_logging import build_job_runtime_context, job_context_scope, log_runtime_execution_plan, resolve_whisper_runtime
 
@@ -50,6 +51,7 @@ def run_batch(
     LOGGER.info("Bắt đầu xử lý hàng loạt: %s video, %s luồng", len(videos), workers)
 
     results: list[ProcessResult] = []
+    storage_manager = StorageManager(project_root, config)
     completed = 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
@@ -70,6 +72,15 @@ def run_batch(
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
             results.append(result)
+            if result.success and result.output and result.output.exists() and config.storage.provider != "local":
+                job = _job_for_batch_result(result)
+                storage_results = storage_manager.upload_final_output(result.output, job, config)
+                if not all(item.success for item in storage_results):
+                    LOGGER.warning(
+                        "Upload sau render thất bại | output=%s | errors=%s",
+                        result.output,
+                        "; ".join(item.error or item.provider for item in storage_results if not item.success),
+                    )
             completed += 1
             status = "THÀNH CÔNG" if result.success else "LỖI"
             target = result.output if result.output else result.source
@@ -95,3 +106,19 @@ def choose_worker_count(value: int | str) -> int:
 def _resolve(project_root: Path, value: str) -> Path:
     path = Path(value)
     return path if path.is_absolute() else project_root / path
+
+
+def _job_for_batch_result(result: ProcessResult) -> VideoJob:
+    identity = f"{result.source.resolve()}|{result.output.resolve() if result.output else ''}"
+    import hashlib
+
+    job_id = "job_" + hashlib.sha1(identity.encode("utf-8")).hexdigest()[:12]
+    return VideoJob(
+        job_id=job_id,
+        source=JobSource.LOCAL_INPUT,
+        status=JobStatus.RENDERED,
+        input_path=str(result.source),
+        output_path=str(result.output) if result.output else None,
+        identity=identity,
+        output_size=result.output.stat().st_size if result.output and result.output.exists() else 0,
+    )
