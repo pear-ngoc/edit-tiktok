@@ -444,6 +444,19 @@ Các volume được mount:
 
 Compose hiện có thêm service `telegram-bot-api` chạy từ image `ghcr.io/bots-house/docker-telegram-bot-api`. Service này dùng để self-host Telegram Bot API khi bạn muốn upload file lớn hơn giới hạn 50 MB của API công khai.
 
+Để cache model `faster-whisper` không bị tải lại sau khi recreate container, `edit-tiktok` đã mount thêm:
+
+- `./data/huggingface:/root/.cache/huggingface`
+
+Vì vậy model sẽ được giữ lại trên máy host trong `data/huggingface/` và các lần `docker compose down` / `up` sau sẽ dùng lại cache cũ thay vì tải lại từ đầu. Nếu muốn tùy biến vị trí cache, bạn có thể đặt thêm:
+
+```bash
+HF_HOME=/root/.cache/huggingface
+HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub
+```
+
+Trong `docker-compose.yml`, service `edit-tiktok` đã tự gán sẵn các biến này để phù hợp với volume mount ở trên.
+
 ## Tăng tốc GPU
 
 Windows NVIDIA:

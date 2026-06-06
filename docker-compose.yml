@@ -1,7 +1,7 @@
 services:
   telegram-bot-api:
     image: ghcr.io/bots-house/docker-telegram-bot-api:latest
-    container_name: edit-tiktok-telegram-bot-api
+    container_name: telegram-bot-api
     restart: unless-stopped
     env_file:
       - .env
@@ -34,6 +34,8 @@ services:
       TELEGRAM_BOT_API_FILE_URL: ${TELEGRAM_BOT_API_FILE_URL:-http://telegram-bot-api:8081/file/bot}
       TELEGRAM_BOT_API_LOCAL_MODE: ${TELEGRAM_BOT_API_LOCAL_MODE:-true}
       REVID_API_KEY: ${REVID_API_KEY:-}
+      HF_HOME: ${HF_HOME:-/root/.cache/huggingface}
+      HUGGINGFACE_HUB_CACHE: ${HUGGINGFACE_HUB_CACHE:-/root/.cache/huggingface/hub}
     volumes:
       - ./input:/app/input
       - ./output:/app/output
@@ -41,6 +43,7 @@ services:
       - ./configs:/app/configs
       - ./logs:/app/logs
       - ./data:/app/data
+      - ./data/huggingface:/root/.cache/huggingface
       - ./config.yaml:/app/config.yaml
     command: ["python", "main.py", "worker"]
 

@@ -102,7 +102,7 @@ encoder:
 subtitles:
   enabled: true
   backend: faster-whisper
-  model_size: medium
+  model_size: large-v3
   language: auto
   output_srt: false
   output_vtt: false
