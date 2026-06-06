@@ -364,7 +364,7 @@ def resolve_whisper_runtime(config: SubtitlesConfig) -> WhisperRuntimeSelection:
     fallback_reason: str | None = None
     if requested_device == "auto":
         resolved_device = "cpu"
-        if platform.system() in {"Windows", "Linux"} and _gpu_likely_available():
+        if platform.system() in {"Windows", "Linux"} and _nvidia_runtime_available():
             resolved_device = "cuda"
     elif requested_device not in {"cpu", "cuda"}:
         resolved_device = "cpu"
@@ -395,6 +395,12 @@ def classification_for_pipeline(encoder: EncoderSelection, whisper_runtime: Whis
     if hardware_encode and whisper_gpu:
         return "GPU encode + GPU transcription + CPU filters"
     if hardware_encode:
+        if encoder.backend.startswith("amd_amf"):
+            return "AMD hardware encode + CPU filters"
+        if encoder.backend.startswith("vaapi"):
+            return "VAAPI hardware encode + CPU filters"
+        if encoder.backend.startswith("videotoolbox"):
+            return "VideoToolbox hardware encode + CPU filters"
         return "GPU encode + CPU filters"
     if whisper_gpu:
         return "GPU transcription + CPU filters"
@@ -513,6 +519,10 @@ def _interesting_encoders(encoders: list[str]) -> list[str]:
         "libx265",
         "h264_nvenc",
         "hevc_nvenc",
+        "h264_amf",
+        "hevc_amf",
+        "h264_vaapi",
+        "hevc_vaapi",
         "h264_videotoolbox",
         "hevc_videotoolbox",
     }
@@ -528,6 +538,10 @@ def _nvidia_runtime_label(runtime: EncoderRuntimeProbe) -> str:
 def _hardware_encoding_label(encoder: EncoderSelection) -> str:
     if encoder.backend.startswith("nvidia"):
         return "YES - NVIDIA NVENC"
+    if encoder.backend.startswith("amd_amf"):
+        return "YES - AMD AMF"
+    if encoder.backend.startswith("vaapi"):
+        return "YES - VAAPI"
     if encoder.backend.startswith("videotoolbox"):
         return "YES - Apple VideoToolbox"
     return "NO"
@@ -549,21 +563,7 @@ def _probe_nvidia_runtime():
     return probe_nvidia_runtime()
 
 
-def _gpu_likely_available() -> bool:
-    try:
-        import shutil
+def _nvidia_runtime_available() -> bool:
+    from ffmpeg_tools.encoders import probe_nvidia_runtime
 
-        if shutil.which("nvidia-smi"):
-            return True
-    except Exception:
-        pass
-    try:
-        import importlib.util
-
-        if importlib.util.find_spec("torch") is None:
-            return False
-        import torch  # type: ignore
-
-        return bool(getattr(torch.cuda, "is_available", lambda: False)())
-    except Exception:
-        return False
+    return probe_nvidia_runtime().nvidia_runtime_available

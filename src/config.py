@@ -12,16 +12,22 @@ from typing import Any, TypeVar
 from models import (
     AppConfig,
     AudioConfig,
+    AmdAmfConfig,
     ColorConfig,
+    CpuConfig,
     EncoderConfig,
     MetadataConfig,
     FormattingConfig,
     LoggingConfig,
     ProcessingConfig,
+    RuntimeConfig,
     QueueConfig,
+    NvidiaConfig,
     RevidAPIConfig,
+    VaapiConfig,
     TelegramConfig,
     SubtitlesConfig,
+    VideotoolboxConfig,
     VideoConfig,
 )
 
@@ -107,6 +113,12 @@ def config_from_dict(data: dict[str, Any]) -> AppConfig:
         telegram=_section(TelegramConfig, data.get("telegram", {}), section_name="telegram"),
         revid_api=_section(RevidAPIConfig, data.get("revid_api", {}), section_name="revid_api"),
         formatting=_section(FormattingConfig, data.get("formatting", {}), section_name="formatting"),
+        runtime=_section(RuntimeConfig, data.get("runtime", {}), section_name="runtime"),
+        nvidia=_section(NvidiaConfig, data.get("nvidia", {}), section_name="nvidia"),
+        amd_amf=_section(AmdAmfConfig, data.get("amd_amf", {}), section_name="amd_amf"),
+        vaapi=_section(VaapiConfig, data.get("vaapi", {}), section_name="vaapi"),
+        videotoolbox=_section(VideotoolboxConfig, data.get("videotoolbox", {}), section_name="videotoolbox"),
+        cpu=_section(CpuConfig, data.get("cpu", {}), section_name="cpu"),
         logging=_section(LoggingConfig, data.get("logging", {}), section_name="logging"),
     )
 

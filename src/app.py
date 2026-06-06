@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from config import apply_overrides, ensure_config_file, load_config, save_default_config
-from ffmpeg_tools.encoders import detect_available_encoders, probe_nvidia_runtime, select_encoder
+from ffmpeg_tools.encoders import detect_available_encoders, probe_encoder_capabilities, probe_nvidia_runtime, select_encoder
 from logging_config import configure_logging
 from models import AppConfig
 from processing.batch import run_batch
@@ -65,7 +65,25 @@ def process_default(
     configure_logging(project_root / "logs", config=config, debug=config.processing.debug_ffmpeg)
     info = get_platform_info()
     encoders = detect_available_encoders()
-    selected = select_encoder(config.encoder, encoders, system=info.system, machine=info.machine)
+    selected = select_encoder(
+        config.encoder,
+        encoders,
+        system=info.system,
+        machine=info.machine,
+        allow_cpu_fallback=config.encoder.allow_cpu_fallback,
+        smoke_test_on_startup=config.encoder.smoke_test_on_startup,
+        cache_capability_results=config.encoder.cache_capability_results,
+        container_gpu_mode=config.runtime.container_gpu_mode if config.runtime.prefer_native_hardware_acceleration else "cpu",
+        vaapi_device=config.vaapi.device,
+    )
+    capabilities = probe_encoder_capabilities(
+        tuple(sorted(set(encoders))),
+        ffmpeg_bin=info.ffmpeg_path or "ffmpeg",
+        system=info.system,
+        machine=info.machine,
+        vaapi_device=config.vaapi.device,
+        smoke_test_on_startup=True,
+    )
     log_startup_summary(
         project_root,
         config,
@@ -109,21 +127,50 @@ def doctor(
 
     info = get_platform_info()
     encoders = detect_available_encoders()
-    selected = select_encoder(config.encoder, encoders, system=info.system, machine=info.machine)
-    nvenc_runtime = probe_nvidia_runtime()
-
-    print("Kiểm tra môi trường edit-tiktok")
-    print(f"Python: {info.python_version} ({'đạt' if is_python_supported() else 'cần >=3.11'})")
-    print(f"Hệ điều hành: {info.system} {info.machine}")
-    print(f"Apple Silicon: {'có' if info.is_apple_silicon else 'không'}")
-    print(f"FFmpeg: {info.ffmpeg_path or 'thiếu'}")
-    print(f"FFprobe: {info.ffprobe_path or 'thiếu'}")
-    print(f"Encoder build hỗ trợ: {', '.join(_interesting_encoders(encoders)) or 'không có'}")
-    print(
-        "NVENC runtime: "
-        + ("có" if nvenc_runtime.nvidia_runtime_available else f"không ({nvenc_runtime.nvidia_runtime_reason or 'unknown'})")
+    capabilities = probe_encoder_capabilities(
+        tuple(sorted(set(encoders))),
+        ffmpeg_bin=info.ffmpeg_path or "ffmpeg",
+        system=info.system,
+        machine=info.machine,
+        vaapi_device=config.vaapi.device,
+        smoke_test_on_startup=True,
     )
-    print(f"Backend khuyến nghị: {selected.description}")
+    selected = select_encoder(
+        config.encoder,
+        encoders,
+        system=info.system,
+        machine=info.machine,
+        allow_cpu_fallback=config.encoder.allow_cpu_fallback,
+        smoke_test_on_startup=config.encoder.smoke_test_on_startup,
+        cache_capability_results=config.encoder.cache_capability_results,
+        container_gpu_mode=config.runtime.container_gpu_mode if config.runtime.prefer_native_hardware_acceleration else "cpu",
+        vaapi_device=config.vaapi.device,
+    )
+
+    print("Platform:")
+    print(f"Runtime OS: {info.system}")
+    print(f"Container: {'có' if Path('/.dockerenv').exists() else 'không'}")
+    print(f"Architecture: {info.machine}")
+    print("")
+    print("FFmpeg:")
+    print(f"h264_nvenc compiled: {'yes' if capabilities['nvidia_h264'].compiled else 'no'}")
+    print(f"h264_amf compiled: {'yes' if capabilities['amd_amf_h264'].compiled else 'no'}")
+    print(f"h264_videotoolbox compiled: {'yes' if capabilities['videotoolbox_h264'].compiled else 'no'}")
+    print(f"h264_vaapi compiled: {'yes' if capabilities['vaapi_h264'].compiled else 'no'}")
+    print(f"libx264 compiled: {'yes' if capabilities['cpu_h264'].compiled else 'no'}")
+    print("")
+    print("Runtime tests:")
+    print(f"NVENC: {'passed' if capabilities['nvidia_h264'].smoke_test_passed else 'failed'}")
+    print(f"AMF: {'passed' if capabilities['amd_amf_h264'].smoke_test_passed else 'failed'}")
+    print(f"VideoToolbox: {'passed' if capabilities['videotoolbox_h264'].smoke_test_passed else 'unavailable'}")
+    print(f"VAAPI: {'passed' if capabilities['vaapi_h264'].smoke_test_passed else 'unavailable'}")
+    print(f"libx264: {'passed' if capabilities['cpu_h264'].smoke_test_passed else 'failed'}")
+    print("")
+    print("Selected backend:")
+    print(selected.backend)
+    print("")
+    print("Pipeline:")
+    print(classification_for_pipeline(selected, resolve_whisper_runtime(config.subtitles)))
     log_startup_summary(
         project_root,
         config,
@@ -472,7 +519,17 @@ def _run_queue_runtime(
     from processing.pipeline import process_video
     info = get_platform_info()
     encoders = detect_available_encoders()
-    selected = select_encoder(config.encoder, encoders, system=info.system, machine=info.machine)
+    selected = select_encoder(
+        config.encoder,
+        encoders,
+        system=info.system,
+        machine=info.machine,
+        allow_cpu_fallback=config.encoder.allow_cpu_fallback,
+        smoke_test_on_startup=config.encoder.smoke_test_on_startup,
+        cache_capability_results=config.encoder.cache_capability_results,
+        container_gpu_mode=config.runtime.container_gpu_mode if config.runtime.prefer_native_hardware_acceleration else "cpu",
+        vaapi_device=config.vaapi.device,
+    )
     log_startup_summary(
         project_root,
         config,

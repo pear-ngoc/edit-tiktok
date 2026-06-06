@@ -7,7 +7,13 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from ffmpeg_tools.encoders import detect_available_encoders, select_encoder
+from ffmpeg_tools.encoders import (
+    detect_available_encoders,
+    mark_backend_unavailable,
+    select_encoder,
+    extract_hardware_failure_reason,
+    is_hardware_runtime_failure,
+)
 from ffmpeg_tools.filters import (
     build_audio_filter,
     build_base_video_filter,
@@ -20,7 +26,7 @@ from ffmpeg_tools.filters import (
 )
 from ffmpeg_tools.probe import probe_video
 from ffmpeg_tools.runner import FFmpegError, run_command
-from models import AppConfig, EncoderSelection, ProcessResult, VideoInfo, VideoJob, JobSource
+from models import AppConfig, EncoderConfig, EncoderSelection, ProcessResult, VideoInfo, VideoJob, JobSource
 from processing.audio import choose_optional_audio_assets, random_eq_values
 from processing.metadata import metadata_args
 from processing.subtitles import burn_subtitles_into_video, generate_subtitles_for_video
@@ -197,6 +203,11 @@ def _prepare_encoder(info: VideoInfo, config: AppConfig) -> tuple[EncoderSelecti
         available_encoders,
         width=width,
         height=height,
+        allow_cpu_fallback=config.encoder.allow_cpu_fallback,
+        smoke_test_on_startup=config.encoder.smoke_test_on_startup,
+        cache_capability_results=config.encoder.cache_capability_results,
+        container_gpu_mode=config.runtime.container_gpu_mode if config.runtime.prefer_native_hardware_acceleration else "cpu",
+        vaapi_device=config.vaapi.device,
     )
     return encoder, width, height, available_encoders
 
@@ -263,7 +274,9 @@ def _run_segmented_pipeline(
                 segment_file=segment_file,
                 segment_filter=segment_filter,
                 info=info,
+                config=config,
                 encoder=encoder,
+                job_context=job_context,
                 debug=ffmpeg_debug,
                 stderr_tail_lines=config.logging.ffmpeg_stderr_tail_lines,
             )
@@ -308,10 +321,15 @@ def _render_segment(
     segment_file: Path,
     segment_filter: str,
     info: VideoInfo,
+    config: AppConfig,
     encoder: EncoderSelection,
+    job_context: JobRuntimeContext,
     debug: bool,
     stderr_tail_lines: int,
 ) -> None:
+    video_filter = f"[0:v]{segment_filter}[vout]"
+    if encoder.backend.startswith("vaapi"):
+        video_filter = f"[0:v]{segment_filter},format=nv12,hwupload[vout]"
     args = [
         "ffmpeg",
         "-y",
@@ -323,7 +341,7 @@ def _render_segment(
         "-t",
         f"{segment.end - segment.start:.6f}",
         "-filter_complex",
-        f"[0:v]{segment_filter}[vout]",
+        video_filter,
         "-map",
         "[vout]",
     ]
@@ -334,7 +352,63 @@ def _render_segment(
 
     args.extend(encoder.args)
     args.extend(["-pix_fmt", "yuv420p", "-movflags", "+faststart", str(segment_file)])
-    run_command(args, debug=debug, stderr_tail_lines=stderr_tail_lines)
+    try:
+        run_command(args, debug=debug, stderr_tail_lines=stderr_tail_lines)
+    except FFmpegError as exc:
+        if encoder.backend.startswith("cpu") or not is_hardware_runtime_failure(exc.result.stderr):
+            raise
+        reason = extract_hardware_failure_reason(exc.result.stderr)
+        LOGGER.warning(
+            "%s [SEGMENT %s] Hardware backend %s failed: %s | retrying with CPU",
+            job_prefix(job_context),
+            segment.index,
+            encoder.backend,
+            reason,
+        )
+        mark_backend_unavailable(encoder.backend, reason)
+        if segment_file.exists():
+            segment_file.unlink(missing_ok=True)
+        cpu_backend = "cpu_h265" if config.encoder.codec == "h265" else "cpu_h264"
+        cpu_encoder = select_encoder(
+            EncoderConfig(
+                backend=cpu_backend,
+                codec=config.encoder.codec,
+                preset=config.encoder.preset,
+                pix_fmt=config.encoder.pix_fmt,
+                faststart=config.encoder.faststart,
+                allow_cpu_fallback=True,
+                smoke_test_on_startup=False,
+                cache_capability_results=False,
+            ),
+            detect_available_encoders(),
+            allow_cpu_fallback=True,
+            smoke_test_on_startup=False,
+            cache_capability_results=False,
+            container_gpu_mode="cpu",
+        )
+        retry_video_filter = f"[0:v]{segment_filter}[vout]"
+        args = [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-ss",
+            f"{segment.start:.6f}",
+            "-i",
+            str(source_file),
+            "-t",
+            f"{segment.end - segment.start:.6f}",
+            "-filter_complex",
+            retry_video_filter,
+            "-map",
+            "[vout]",
+        ]
+        if info.has_audio:
+            args.extend(["-map", "0:a?", "-c:a", "aac", "-b:a", "192k"])
+        else:
+            args.append("-an")
+        args.extend(cpu_encoder.args)
+        args.extend(["-pix_fmt", "yuv420p", "-movflags", "+faststart", str(segment_file)])
+        run_command(args, debug=debug, stderr_tail_lines=stderr_tail_lines)
 
 
 def _write_concat_file(concat_source: Path, segment_files: list[Path]) -> None:
@@ -381,6 +455,7 @@ def _run_single_pass(
             info=info,
             width=width,
             height=height,
+            encoder_backend=encoder.backend,
             lut_paths=lut_paths,
             ambient=ambient,
             bgm=bgm,
@@ -426,10 +501,70 @@ def _run_single_pass(
             LOGGER.debug("%s [FINAL_VIDEO_ENCODE] video_filter_chain=%s", job_prefix(job_context), filter_complex)
             LOGGER.debug("%s [FINAL_VIDEO_ENCODE] ffmpeg_args=%s", job_prefix(job_context), redact_command(args))
             run_command(args, debug=ffmpeg_debug, stderr_tail_lines=config.logging.ffmpeg_stderr_tail_lines)
-    except FFmpegError:
+    except FFmpegError as exc:
         if output_file.exists():
             output_file.unlink(missing_ok=True)
-        raise
+        if encoder.backend.startswith("cpu") or not is_hardware_runtime_failure(exc.result.stderr):
+            raise
+        reason = extract_hardware_failure_reason(exc.result.stderr)
+        LOGGER.warning(
+            "%s [FINAL_VIDEO_ENCODE] Hardware backend %s failed: %s | retrying with CPU",
+            job_prefix(job_context),
+            encoder.backend,
+            reason,
+        )
+        mark_backend_unavailable(encoder.backend, reason)
+        cpu_backend = "cpu_h265" if config.encoder.codec == "h265" else "cpu_h264"
+        cpu_encoder = select_encoder(
+            EncoderConfig(
+                backend=cpu_backend,
+                codec=config.encoder.codec,
+                preset=config.encoder.preset,
+                pix_fmt=config.encoder.pix_fmt,
+                faststart=config.encoder.faststart,
+                allow_cpu_fallback=True,
+                smoke_test_on_startup=False,
+                cache_capability_results=False,
+            ),
+            detect_available_encoders(),
+            allow_cpu_fallback=True,
+            smoke_test_on_startup=False,
+            cache_capability_results=False,
+            container_gpu_mode="cpu",
+        )
+        args = ["ffmpeg", "-y", "-hide_banner", "-i", str(source_file)]
+        if ambient:
+            args.extend(["-stream_loop", "-1", "-i", str(ambient)])
+        if bgm:
+            args.extend(["-stream_loop", "-1", "-i", str(bgm)])
+
+        filter_complex, maps = _build_filter_complex(
+            info=info,
+            width=width,
+            height=height,
+            encoder_backend=cpu_encoder.backend,
+            lut_paths=lut_paths,
+            ambient=ambient,
+            bgm=bgm,
+            config=config,
+            apply_visual_effects=apply_visual_effects,
+            job_context=job_context,
+        )
+        args.extend(["-filter_complex", filter_complex])
+        for stream_map in maps:
+            args.extend(["-map", stream_map])
+        args.extend(cpu_encoder.args)
+        args.extend(["-pix_fmt", "yuv420p"])
+        if "[aout]" in maps:
+            args.extend(["-c:a", "aac", "-b:a", "192k"])
+        else:
+            args.append("-an")
+        if config.encoder.faststart:
+            args.extend(["-movflags", "+faststart"])
+        with stage_scope(job_context, "WRITE_METADATA", logger=LOGGER, metadata_mode=config.metadata.mode):
+            args.extend(metadata_args(config.metadata))
+        args.append(str(output_file))
+        run_command(args, debug=ffmpeg_debug, stderr_tail_lines=config.logging.ffmpeg_stderr_tail_lines)
 
 
 def _build_filter_complex(
@@ -437,6 +572,7 @@ def _build_filter_complex(
     info: VideoInfo,
     width: int,
     height: int,
+    encoder_backend: str,
     lut_paths: list[Path],
     ambient: Path | None,
     bgm: Path | None,
@@ -475,6 +611,9 @@ def _build_filter_complex(
 
     video_filters.append("format=yuv420p")
     parts.append(f"[0:v]{','.join(video_filters)}[vout]")
+    if encoder_backend.startswith("vaapi"):
+        parts.append("[vout]format=nv12,hwupload[vout_hw]")
+        maps = ["[vout_hw]"]
     LOGGER.info("%s [BUILD_VIDEO_FILTERS] video_filter_chain=%s", job_prefix(job_context), ",".join(video_filters))
 
     audio_labels: list[str] = []

@@ -1,0 +1,4 @@
+services:
+  edit-tiktok:
+    devices:
+      - /dev/dri:/dev/dri

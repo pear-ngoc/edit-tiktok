@@ -93,6 +93,41 @@ class EncoderConfig:
     preset: str = "balanced"
     pix_fmt: str = "yuv420p"
     faststart: bool = True
+    allow_cpu_fallback: bool = True
+    smoke_test_on_startup: bool = True
+    cache_capability_results: bool = True
+
+
+@dataclass(slots=True)
+class RuntimeConfig:
+    prefer_native_hardware_acceleration: bool = True
+    container_gpu_mode: str = "auto"
+
+
+@dataclass(slots=True)
+class NvidiaConfig:
+    enabled: bool = True
+
+
+@dataclass(slots=True)
+class AmdAmfConfig:
+    enabled: bool = True
+
+
+@dataclass(slots=True)
+class VaapiConfig:
+    enabled: bool = True
+    device: str = "auto"
+
+
+@dataclass(slots=True)
+class VideotoolboxConfig:
+    enabled: bool = True
+
+
+@dataclass(slots=True)
+class CpuConfig:
+    enabled: bool = True
 
 
 @dataclass(slots=True)
@@ -191,6 +226,12 @@ class AppConfig:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     revid_api: RevidAPIConfig = field(default_factory=RevidAPIConfig)
     formatting: FormattingConfig = field(default_factory=FormattingConfig)
+    runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
+    nvidia: NvidiaConfig = field(default_factory=NvidiaConfig)
+    amd_amf: AmdAmfConfig = field(default_factory=AmdAmfConfig)
+    vaapi: VaapiConfig = field(default_factory=VaapiConfig)
+    videotoolbox: VideotoolboxConfig = field(default_factory=VideotoolboxConfig)
+    cpu: CpuConfig = field(default_factory=CpuConfig)
     logging: "LoggingConfig" = field(default_factory=lambda: LoggingConfig())
 
 

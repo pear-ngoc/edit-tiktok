@@ -8,11 +8,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from ffmpeg_tools.encoders import detect_available_encoders, select_encoder
+from ffmpeg_tools.encoders import (
+    detect_available_encoders,
+    extract_hardware_failure_reason,
+    is_hardware_runtime_failure,
+    mark_backend_unavailable,
+    select_encoder,
+)
 from ffmpeg_tools.filters import build_ass_burn_filter, build_subtitles_burn_filter
 from ffmpeg_tools.probe import probe_video
 from ffmpeg_tools.runner import FFmpegError, run_command
-from models import AppConfig, EncoderSelection, FormattingConfig, SubtitlesConfig
+from models import AppConfig, EncoderConfig, EncoderSelection, FormattingConfig, SubtitlesConfig
 from utils.runtime_logging import (
     JobRuntimeContext,
     WhisperRuntimeSelection,
@@ -460,6 +466,11 @@ def burn_subtitles_into_video(
         available_encoders,
         width=probe.width or 1280,
         height=probe.height or 720,
+        allow_cpu_fallback=config.encoder.allow_cpu_fallback,
+        smoke_test_on_startup=config.encoder.smoke_test_on_startup,
+        cache_capability_results=config.encoder.cache_capability_results,
+        container_gpu_mode=config.runtime.container_gpu_mode if config.runtime.prefer_native_hardware_acceleration else "cpu",
+        vaapi_device=config.vaapi.device,
     )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -539,12 +550,13 @@ def burn_subtitles_into_video(
         encoder.codec_name,
     )
 
+    filter_chain = _vaapi_aware_filter_chain(legacy_filter_chain, encoder.backend)
     args = _build_burn_command(
         video_path=video_path,
         output_path=output_path,
         config=config,
         encoder=encoder,
-        filter_chain=legacy_filter_chain,
+        filter_chain=filter_chain,
         has_audio=probe.has_audio,
         audio_mode="copy",
     )
@@ -554,23 +566,83 @@ def burn_subtitles_into_video(
         with stage_scope(runtime_context, "BURN_CAPTIONS", logger=LOGGER, audio_mode="copy", start_level=logging.INFO):
             run_command(args, debug=debug)
         audio_mode = "copy"
-    except FFmpegError:
-        if not probe.has_audio:
-            raise
-        LOGGER.warning("Copy audio thất bại khi burn captions, thử AAC fallback an toàn.")
-        args = _build_burn_command(
-            video_path=video_path,
-            output_path=output_path,
-            config=config,
-            encoder=encoder,
-        filter_chain=legacy_filter_chain,
-            has_audio=probe.has_audio,
-            audio_mode="aac",
-        )
-        LOGGER.info("Burn FFmpeg command (audio=aac): %s", " ".join(args))
-        with stage_scope(runtime_context, "BURN_CAPTIONS", logger=LOGGER, audio_mode="aac", start_level=logging.INFO):
-            run_command(args, debug=debug)
-        audio_mode = "aac"
+    except FFmpegError as exc:
+        if encoder.backend.startswith("cpu") or not is_hardware_runtime_failure(exc.result.stderr):
+            if not probe.has_audio:
+                raise
+            LOGGER.warning("Copy audio thất bại khi burn captions, thử AAC fallback an toàn.")
+            args = _build_burn_command(
+                video_path=video_path,
+                output_path=output_path,
+                config=config,
+                encoder=encoder,
+                filter_chain=filter_chain,
+                has_audio=probe.has_audio,
+                audio_mode="aac",
+            )
+            LOGGER.info("Burn FFmpeg command (audio=aac): %s", " ".join(args))
+            with stage_scope(runtime_context, "BURN_CAPTIONS", logger=LOGGER, audio_mode="aac", start_level=logging.INFO):
+                run_command(args, debug=debug)
+            audio_mode = "aac"
+        else:
+            reason = extract_hardware_failure_reason(exc.result.stderr)
+            LOGGER.warning(
+                "%s [BURN_CAPTIONS] Hardware backend %s failed: %s | retrying with CPU",
+                job_prefix(runtime_context),
+                encoder.backend,
+                reason,
+            )
+            mark_backend_unavailable(encoder.backend, reason)
+            cpu_backend = "cpu_h265" if config.encoder.codec == "h265" else "cpu_h264"
+            cpu_encoder = select_encoder(
+                EncoderConfig(
+                    backend=cpu_backend,
+                    codec=config.encoder.codec,
+                    preset=config.encoder.preset,
+                    pix_fmt=config.encoder.pix_fmt,
+                    faststart=config.encoder.faststart,
+                    allow_cpu_fallback=True,
+                    smoke_test_on_startup=False,
+                    cache_capability_results=False,
+                ),
+                detect_available_encoders(),
+                allow_cpu_fallback=True,
+                smoke_test_on_startup=False,
+                cache_capability_results=False,
+                container_gpu_mode="cpu",
+            )
+            cpu_filter_chain = _vaapi_aware_filter_chain(legacy_filter_chain, cpu_encoder.backend)
+            args = _build_burn_command(
+                video_path=video_path,
+                output_path=output_path,
+                config=config,
+                encoder=cpu_encoder,
+                filter_chain=cpu_filter_chain,
+                has_audio=probe.has_audio,
+                audio_mode="copy",
+            )
+            LOGGER.debug("%s [BURN_CAPTIONS] ffmpeg_args_cpu_fallback=%s", job_prefix(runtime_context), " ".join(args))
+            try:
+                with stage_scope(runtime_context, "BURN_CAPTIONS", logger=LOGGER, audio_mode="copy", start_level=logging.INFO):
+                    run_command(args, debug=debug)
+                audio_mode = "copy"
+            except FFmpegError:
+                if not probe.has_audio:
+                    raise
+                LOGGER.warning("Copy audio thất bại khi burn captions, thử AAC fallback an toàn.")
+                args = _build_burn_command(
+                    video_path=video_path,
+                    output_path=output_path,
+                    config=config,
+                    encoder=cpu_encoder,
+                    filter_chain=cpu_filter_chain,
+                    has_audio=probe.has_audio,
+                    audio_mode="aac",
+                )
+                LOGGER.info("Burn FFmpeg command (audio=aac): %s", " ".join(args))
+                with stage_scope(runtime_context, "BURN_CAPTIONS", logger=LOGGER, audio_mode="aac", start_level=logging.INFO):
+                    run_command(args, debug=debug)
+                audio_mode = "aac"
 
     burned_probe = probe_video(output_path)
     _log_probe_comparison(probe, burned_probe, runtime_context, stage_name="VALIDATE_BURNED_OUTPUT")
@@ -945,6 +1017,12 @@ def _build_burn_filter(subtitle_path: Path, config: AppConfig) -> str:
         font_size=config.formatting.caption_font_size,
         margin_v=config.formatting.caption_margin_v,
     )
+
+
+def _vaapi_aware_filter_chain(filter_chain: str, encoder_backend: str) -> str:
+    if encoder_backend.startswith("vaapi"):
+        return f"{filter_chain},format=nv12,hwupload"
+    return filter_chain
 
 
 def _build_burn_command(

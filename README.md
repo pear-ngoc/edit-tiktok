@@ -457,18 +457,26 @@ HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub
 
 Trong `docker-compose.yml`, service `edit-tiktok` đã tự gán sẵn các biến này để phù hợp với volume mount ở trên.
 
-### Bật GPU NVIDIA trong Docker
+### GPU trong Docker
 
-Nếu máy host có NVIDIA GPU và Docker Desktop đang chạy trên WSL2, service `edit-tiktok` đã được cấu hình để xin GPU bằng:
+`docker-compose.yml` mặc định **CPU-safe** và luôn khởi động được trên máy không có GPU.
 
-```yaml
-gpus: all
-environment:
-  NVIDIA_VISIBLE_DEVICES: all
-  NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+Nếu bạn có **NVIDIA GPU thật** và Docker Desktop/WSL2 hỗ trợ GPU passthrough, hãy dùng override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.nvidia.yml up -d --build
 ```
 
-Đây là phần cần có để container thực sự nhìn thấy `libcuda.so.1` và dùng được `h264_nvenc` hoặc faster-whisper CUDA. Chỉ thấy `h264_nvenc` trong danh sách encoder của FFmpeg chưa đủ, vì đó mới chỉ là hỗ trợ build-time. Bạn có thể kiểm tra runtime thật bằng:
+Nếu bạn chạy **Linux với `/dev/dri`** và muốn thử VAAPI, dùng:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.vaapi.yml up -d --build
+```
+
+Không nên bật NVIDIA override trên máy AMD/CPU-only hoặc trên Docker Desktop khi runtime GPU chưa sẵn sàng.  
+Nếu container không thấy `libcuda.so.1`, app sẽ tự fallback về CPU `libx264` để không làm hỏng toàn bộ job.
+
+Bạn có thể kiểm tra runtime thật bằng:
 
 ```bash
 docker compose run --rm edit-tiktok nvidia-smi
@@ -483,14 +491,30 @@ Nếu lệnh này không thấy GPU, hãy kiểm tra:
 
 ## Tăng tốc GPU
 
-Windows NVIDIA:
+Windows NVIDIA native:
 
 - Cài driver NVIDIA mới.
 - Cài FFmpeg build có NVENC.
 - Chạy `python main.py doctor`.
-- Nếu thấy `h264_nvenc`, backend `auto` sẽ ưu tiên NVIDIA.
+- Nếu `NVENC runtime: available`, backend `auto` sẽ ưu tiên NVIDIA.
 
-macOS Apple Silicon:
+Windows NVIDIA Docker:
+
+- Dùng `docker-compose.nvidia.yml`.
+- Chỉ dùng khi `nvidia-smi` trong container chạy được.
+
+Windows AMD native:
+
+- Cài FFmpeg build có AMF.
+- Chạy `python main.py doctor`.
+- Nếu `AMF: passed`, backend `auto` có thể chọn AMF.
+
+Windows AMD Docker Desktop:
+
+- Dùng cấu hình mặc định CPU-safe.
+- Không có override AMD GPU cho Docker Desktop.
+
+macOS Apple Silicon native:
 
 - Cài FFmpeg bằng Homebrew:
 
@@ -499,7 +523,32 @@ brew install ffmpeg
 ```
 
 - Chạy `python main.py doctor`.
-- Nếu thấy `h264_videotoolbox`, backend `auto` sẽ ưu tiên VideoToolbox.
+- Nếu thấy `h264_videotoolbox` runtime passed, backend `auto` sẽ ưu tiên VideoToolbox.
+
+macOS Docker:
+
+- Dùng cấu hình mặc định CPU-safe.
+- Docker Linux container không giả định VideoToolbox trong container.
+
+Linux NVIDIA native:
+
+- Chạy `python main.py doctor`.
+- Nếu `NVENC runtime: available`, backend `auto` sẽ ưu tiên NVENC.
+
+Linux NVIDIA Docker:
+
+- Dùng `docker-compose.nvidia.yml`.
+- Container phải có GPU passthrough thật.
+
+Linux AMD native:
+
+- Chạy `python main.py doctor`.
+- Nếu `/dev/dri` và VAAPI runtime hợp lệ, backend `auto` có thể chọn VAAPI.
+
+Linux AMD Docker:
+
+- Dùng `docker-compose.vaapi.yml` nếu bạn đã mount `/dev/dri`.
+- Nếu không, app sẽ fallback CPU.
 
 Nếu GPU encoder không có, ứng dụng tự fallback về CPU `libx264`.
 

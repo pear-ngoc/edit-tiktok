@@ -7,10 +7,16 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Any
 
-from ffmpeg_tools.encoders import detect_available_encoders, select_encoder
+from ffmpeg_tools.encoders import (
+    detect_available_encoders,
+    extract_hardware_failure_reason,
+    is_hardware_runtime_failure,
+    mark_backend_unavailable,
+    select_encoder,
+)
 from ffmpeg_tools.probe import probe_video
 from ffmpeg_tools.runner import FFmpegError, run_command
-from models import AppConfig, EncoderSelection, FormattingConfig
+from models import AppConfig, EncoderConfig, EncoderSelection, FormattingConfig
 from processing.subtitles import SubtitleCue, wrap_caption_text
 from utils.paths import resolve_project_path
 from utils.runtime_logging import (
@@ -369,6 +375,11 @@ def burn_rounded_captions(
         available_encoders,
         width=probe.width or 1280,
         height=probe.height or 720,
+        allow_cpu_fallback=config.encoder.allow_cpu_fallback,
+        smoke_test_on_startup=config.encoder.smoke_test_on_startup,
+        cache_capability_results=config.encoder.cache_capability_results,
+        container_gpu_mode=config.runtime.container_gpu_mode if config.runtime.prefer_native_hardware_acceleration else "cpu",
+        vaapi_device=config.vaapi.device,
     )
     runtime_context = job_context or _fallback_job_context(video_path, output_path.parent)
     resolved_style, font_resolution = resolve_caption_style(
@@ -422,6 +433,9 @@ def burn_rounded_captions(
             margin_v=resolved_style.margin_v,
             vertical_offset=resolved_style.vertical_offset,
         )
+        if encoder.backend.startswith("vaapi"):
+            filter_complex = f"{filter_complex};{final_label}format=nv12,hwupload[vout]"
+            final_label = "[vout]"
         args = _build_burn_command(
             video_path=video_path,
             output_path=output_path,
@@ -452,23 +466,90 @@ def burn_rounded_captions(
         with stage_scope(runtime_context, "BURN_CAPTIONS", logger=LOGGER, renderer=resolved_style.renderer):
             try:
                 run_command(args, debug=debug, stderr_tail_lines=config.logging.ffmpeg_stderr_tail_lines)
-            except FFmpegError:
-                if not probe.has_audio:
-                    raise
-                LOGGER.warning("Audio copy thất bại khi burn rounded captions, thử AAC fallback an toàn.")
-                args = _build_burn_command(
-                    video_path=video_path,
-                    output_path=output_path,
-                    config=config,
-                    encoder=encoder,
-                    filter_chain=filter_complex,
-                    has_audio=probe.has_audio,
-                    audio_mode="aac",
-                    overlay_input_args=input_args,
-                    video_map=final_label,
-                )
-                LOGGER.debug("%s [BURN_CAPTIONS] ffmpeg_args_fallback=%s", job_prefix(runtime_context), " ".join(args))
-                run_command(args, debug=debug, stderr_tail_lines=config.logging.ffmpeg_stderr_tail_lines)
+            except FFmpegError as exc:
+                if encoder.backend.startswith("cpu") or not is_hardware_runtime_failure(exc.result.stderr):
+                    if not probe.has_audio:
+                        raise
+                    LOGGER.warning("Audio copy thất bại khi burn rounded captions, thử AAC fallback an toàn.")
+                    args = _build_burn_command(
+                        video_path=video_path,
+                        output_path=output_path,
+                        config=config,
+                        encoder=encoder,
+                        filter_chain=filter_complex,
+                        has_audio=probe.has_audio,
+                        audio_mode="aac",
+                        overlay_input_args=input_args,
+                        video_map=final_label,
+                    )
+                    LOGGER.debug("%s [BURN_CAPTIONS] ffmpeg_args_fallback=%s", job_prefix(runtime_context), " ".join(args))
+                    run_command(args, debug=debug, stderr_tail_lines=config.logging.ffmpeg_stderr_tail_lines)
+                else:
+                    reason = extract_hardware_failure_reason(exc.result.stderr)
+                    LOGGER.warning(
+                        "%s [BURN_CAPTIONS] Hardware backend %s failed: %s | retrying with CPU",
+                        job_prefix(runtime_context),
+                        encoder.backend,
+                        reason,
+                    )
+                    mark_backend_unavailable(encoder.backend, reason)
+                    cpu_backend = "cpu_h265" if config.encoder.codec == "h265" else "cpu_h264"
+                    cpu_encoder = select_encoder(
+                        EncoderConfig(
+                            backend=cpu_backend,
+                            codec=config.encoder.codec,
+                            preset=config.encoder.preset,
+                            pix_fmt=config.encoder.pix_fmt,
+                            faststart=config.encoder.faststart,
+                            allow_cpu_fallback=True,
+                            smoke_test_on_startup=False,
+                            cache_capability_results=False,
+                        ),
+                        detect_available_encoders(),
+                        allow_cpu_fallback=True,
+                        smoke_test_on_startup=False,
+                        cache_capability_results=False,
+                        container_gpu_mode="cpu",
+                    )
+                    cpu_filter_complex, cpu_final_label = build_caption_overlay_filter(
+                        rendered_assets,
+                        margin_v=resolved_style.margin_v,
+                        vertical_offset=resolved_style.vertical_offset,
+                    )
+                    if cpu_encoder.backend.startswith("vaapi"):
+                        cpu_filter_complex = f"{cpu_filter_complex};{cpu_final_label}format=nv12,hwupload[vout]"
+                        cpu_final_label = "[vout]"
+                    args = _build_burn_command(
+                        video_path=video_path,
+                        output_path=output_path,
+                        config=config,
+                        encoder=cpu_encoder,
+                        filter_chain=cpu_filter_complex,
+                        has_audio=probe.has_audio,
+                        audio_mode="copy",
+                        overlay_input_args=input_args,
+                        video_map=cpu_final_label,
+                    )
+                    LOGGER.debug("%s [BURN_CAPTIONS] ffmpeg_args_cpu_fallback=%s", job_prefix(runtime_context), " ".join(args))
+                    try:
+                        run_command(args, debug=debug, stderr_tail_lines=config.logging.ffmpeg_stderr_tail_lines)
+                    except FFmpegError:
+                        if not probe.has_audio:
+                            raise
+                        LOGGER.warning("Audio copy thất bại khi burn rounded captions, thử AAC fallback an toàn.")
+                        args = _build_burn_command(
+                            video_path=video_path,
+                            output_path=output_path,
+                            config=config,
+                            encoder=cpu_encoder,
+                            filter_chain=cpu_filter_complex,
+                            has_audio=probe.has_audio,
+                            audio_mode="aac",
+                            overlay_input_args=input_args,
+                            video_map=cpu_final_label,
+                        )
+                        LOGGER.debug("%s [BURN_CAPTIONS] ffmpeg_args_cpu_aac=%s", job_prefix(runtime_context), " ".join(args))
+                        run_command(args, debug=debug, stderr_tail_lines=config.logging.ffmpeg_stderr_tail_lines)
     except Exception:
         if not config.logging.retain_failed_temp:
             shutil.rmtree(job_temp_root, ignore_errors=True)
