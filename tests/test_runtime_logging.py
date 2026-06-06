@@ -15,6 +15,7 @@ from utils.runtime_logging import (
     redact_command,
     resolve_whisper_runtime,
     stage_scope,
+    log_startup_summary,
 )
 
 
@@ -131,3 +132,35 @@ def test_validation_probe_logs_changed_dimensions(caplog) -> None:
     )
     _log_validation_probe(context, input_probe=before, output_probe=after)
     assert "Kích thước output thay đổi" in caplog.text
+
+
+def test_startup_summary_separates_build_and_runtime_nvenc(monkeypatch, caplog, tmp_path: Path) -> None:
+    caplog.set_level(logging.INFO)
+    config = default_config()
+    encoder = select_encoder(EncoderConfig(backend="auto"), ["h264_nvenc", "libx264"], system="Linux", machine="x86_64", runtime_probe=None)
+    whisper = resolve_whisper_runtime(config.subtitles)
+    context = JobRuntimeContext(
+        job_id="job_runtime",
+        source="local_input",
+        input_path=Path("input/video.mp4"),
+        output_path=Path("output/video.mp4"),
+        worker_slot=1,
+        worker_total=1,
+        thread_name="worker-1",
+        pid=123,
+    )
+
+    monkeypatch.setattr("utils.runtime_logging.probe_nvidia_runtime", lambda: type("Probe", (), {"nvidia_runtime_available": False, "nvidia_runtime_reason": "libcuda.so.1 không khả dụng"})())
+
+    log_startup_summary(
+        tmp_path,
+        config,
+        ffmpeg_path="/usr/bin/ffmpeg",
+        ffprobe_path="/usr/bin/ffprobe",
+        available_encoders=["h264_nvenc", "libx264"],
+        encoder=encoder,
+        whisper_runtime=whisper,
+    )
+
+    assert "NVENC build=available" in caplog.text
+    assert "NVENC runtime=unavailable" in caplog.text

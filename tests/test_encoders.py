@@ -1,4 +1,4 @@
-from ffmpeg_tools.encoders import parse_encoder_names, select_encoder
+from ffmpeg_tools.encoders import EncoderRuntimeProbe, parse_encoder_names, select_encoder
 from models import EncoderConfig
 
 
@@ -22,3 +22,16 @@ def test_select_encoder_falls_back_to_cpu() -> None:
     )
     assert selected.backend == "cpu_h264"
     assert selected.codec_name == "libx264"
+
+
+def test_select_encoder_falls_back_when_nvenc_runtime_missing() -> None:
+    selected = select_encoder(
+        EncoderConfig(backend="nvidia_h264"),
+        ["h264_nvenc", "libx264"],
+        system="Linux",
+        machine="x86_64",
+        runtime_probe=EncoderRuntimeProbe(False, "libcuda.so.1 không khả dụng"),
+    )
+    assert selected.backend == "cpu_h264"
+    assert selected.codec_name == "libx264"
+    assert "libcuda.so.1" in (selected.fallback_reason or "")

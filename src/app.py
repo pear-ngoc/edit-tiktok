@@ -6,7 +6,7 @@ import time
 from pathlib import Path
 
 from config import apply_overrides, ensure_config_file, load_config, save_default_config
-from ffmpeg_tools.encoders import detect_available_encoders, select_encoder
+from ffmpeg_tools.encoders import detect_available_encoders, probe_nvidia_runtime, select_encoder
 from logging_config import configure_logging
 from models import AppConfig
 from processing.batch import run_batch
@@ -110,6 +110,7 @@ def doctor(
     info = get_platform_info()
     encoders = detect_available_encoders()
     selected = select_encoder(config.encoder, encoders, system=info.system, machine=info.machine)
+    nvenc_runtime = probe_nvidia_runtime()
 
     print("Kiểm tra môi trường edit-tiktok")
     print(f"Python: {info.python_version} ({'đạt' if is_python_supported() else 'cần >=3.11'})")
@@ -117,7 +118,11 @@ def doctor(
     print(f"Apple Silicon: {'có' if info.is_apple_silicon else 'không'}")
     print(f"FFmpeg: {info.ffmpeg_path or 'thiếu'}")
     print(f"FFprobe: {info.ffprobe_path or 'thiếu'}")
-    print(f"Encoder phát hiện được: {', '.join(_interesting_encoders(encoders)) or 'không có'}")
+    print(f"Encoder build hỗ trợ: {', '.join(_interesting_encoders(encoders)) or 'không có'}")
+    print(
+        "NVENC runtime: "
+        + ("có" if nvenc_runtime.nvidia_runtime_available else f"không ({nvenc_runtime.nvidia_runtime_reason or 'unknown'})")
+    )
     print(f"Backend khuyến nghị: {selected.description}")
     log_startup_summary(
         project_root,

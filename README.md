@@ -457,6 +457,30 @@ HUGGINGFACE_HUB_CACHE=/root/.cache/huggingface/hub
 
 Trong `docker-compose.yml`, service `edit-tiktok` đã tự gán sẵn các biến này để phù hợp với volume mount ở trên.
 
+### Bật GPU NVIDIA trong Docker
+
+Nếu máy host có NVIDIA GPU và Docker Desktop đang chạy trên WSL2, service `edit-tiktok` đã được cấu hình để xin GPU bằng:
+
+```yaml
+gpus: all
+environment:
+  NVIDIA_VISIBLE_DEVICES: all
+  NVIDIA_DRIVER_CAPABILITIES: compute,video,utility
+```
+
+Đây là phần cần có để container thực sự nhìn thấy `libcuda.so.1` và dùng được `h264_nvenc` hoặc faster-whisper CUDA. Chỉ thấy `h264_nvenc` trong danh sách encoder của FFmpeg chưa đủ, vì đó mới chỉ là hỗ trợ build-time. Bạn có thể kiểm tra runtime thật bằng:
+
+```bash
+docker compose run --rm edit-tiktok nvidia-smi
+```
+
+Nếu lệnh này không thấy GPU, hãy kiểm tra:
+
+- Docker Desktop đang bật WSL2 backend
+- Driver NVIDIA trên Windows có hỗ trợ WSL2 GPU
+- `wsl --update` đã chạy
+- máy có GPU NVIDIA thật
+
 ## Tăng tốc GPU
 
 Windows NVIDIA:

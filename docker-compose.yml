@@ -26,6 +26,7 @@ services:
     restart: unless-stopped
     depends_on:
       - telegram-bot-api
+    gpus: all
     env_file:
       - .env
     environment:
@@ -34,6 +35,8 @@ services:
       TELEGRAM_BOT_API_FILE_URL: ${TELEGRAM_BOT_API_FILE_URL:-http://telegram-bot-api:8081/file/bot}
       TELEGRAM_BOT_API_LOCAL_MODE: ${TELEGRAM_BOT_API_LOCAL_MODE:-true}
       REVID_API_KEY: ${REVID_API_KEY:-}
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+      NVIDIA_DRIVER_CAPABILITIES: ${NVIDIA_DRIVER_CAPABILITIES:-compute,video,utility}
       HF_HOME: ${HF_HOME:-/root/.cache/huggingface}
       HUGGINGFACE_HUB_CACHE: ${HUGGINGFACE_HUB_CACHE:-/root/.cache/huggingface/hub}
     volumes:

@@ -224,6 +224,8 @@ def log_runtime_execution_plan(
     fallback_reason: str | None = None,
 ) -> None:
     logger = LOGGER
+    nvenc_runtime = _probe_nvidia_runtime()
+    nvenc_runtime_label = _nvidia_runtime_label(nvenc_runtime)
     logger.info("Runtime execution plan")
     logger.info("Platform: %s %s", platform.system(), platform.machine())
     logger.info(
@@ -239,6 +241,7 @@ def log_runtime_execution_plan(
     logger.info("FFmpeg encoder: %s", encoder.codec_name)
     logger.info("Requested video codec: %s", config.encoder.codec)
     logger.info("Available encoders: %s", ", ".join(sorted(_interesting_encoders(available_encoders))) or "none")
+    logger.info("NVIDIA runtime: %s", nvenc_runtime_label)
     logger.info("Hardware encoding: %s", _hardware_encoding_label(encoder))
     logger.info("Hardware decoding: %s", hardware_decoding)
     logger.info("Video filters: %s", video_filters_backend)
@@ -274,6 +277,8 @@ def print_runtime_execution_plan(
             encoder,
             whisper_runtime,
         )
+    nvenc_runtime = _probe_nvidia_runtime()
+    nvenc_runtime_label = _nvidia_runtime_label(nvenc_runtime)
     lines = [
         "Runtime execution plan",
         f"Platform: {platform.system()} {platform.machine()}",
@@ -285,6 +290,7 @@ def print_runtime_execution_plan(
         f"FFmpeg encoder: {encoder.codec_name}",
         f"Requested video codec: {config.encoder.codec}",
         f"Available encoders: {', '.join(sorted(_interesting_encoders(available_encoders))) or 'none'}",
+        f"NVIDIA runtime: {nvenc_runtime_label}",
         f"Hardware encoding: {_hardware_encoding_label(encoder)}",
         f"Hardware decoding: {hardware_decoding}",
         f"Video filters: {video_filters_backend}",
@@ -315,15 +321,23 @@ def log_startup_summary(
     whisper_runtime: WhisperRuntimeSelection | None,
 ) -> None:
     logger = LOGGER
+    nvenc_runtime = _probe_nvidia_runtime()
+    nvenc_runtime_label = _nvidia_runtime_label(nvenc_runtime)
     logger.info("[RUNTIME] OS=%s %s | CPU=%s | FFmpeg=%s | FFprobe=%s", platform.system(), platform.machine(), os.cpu_count() or "unknown", ffmpeg_path or "missing", ffprobe_path or "missing")
     logger.info(
-        "[RUNTIME] Encoders | default=%s | VideoToolbox=%s | NVENC=%s | CUDA transcription=%s | workers=%s",
+        "[RUNTIME] Encoders | default=%s | VideoToolbox build=%s | NVENC build=%s | NVENC runtime=%s | CUDA transcription=%s | workers=%s",
         encoder.codec_name,
         "available" if _has_encoder(available_encoders, "videotoolbox") else "unavailable",
         "available" if _has_encoder(available_encoders, "nvenc") else "unavailable",
+        nvenc_runtime_label,
         "available" if whisper_runtime and whisper_runtime.resolved_device == "cuda" else "unavailable",
         config.queue.max_workers,
     )
+    if _has_encoder(available_encoders, "nvenc") and not nvenc_runtime.nvidia_runtime_available:
+        logger.warning(
+            "[RUNTIME] FFmpeg có h264_nvenc/hevc_nvenc nhưng runtime NVIDIA không khả dụng: %s",
+            nvenc_runtime.nvidia_runtime_reason or "unknown",
+        )
     if config.queue.max_workers >= 5:
         logger.warning("[RUNTIME] Warning: five simultaneous FFmpeg jobs may overload this machine")
     logger.debug("[RUNTIME] Project root: %s", project_root)
@@ -505,6 +519,12 @@ def _interesting_encoders(encoders: list[str]) -> list[str]:
     return [encoder for encoder in encoders if encoder in wanted]
 
 
+def _nvidia_runtime_label(runtime: EncoderRuntimeProbe) -> str:
+    if runtime.nvidia_runtime_available:
+        return "available"
+    return f"unavailable ({runtime.nvidia_runtime_reason or 'unknown'})"
+
+
 def _hardware_encoding_label(encoder: EncoderSelection) -> str:
     if encoder.backend.startswith("nvidia"):
         return "YES - NVIDIA NVENC"
@@ -521,6 +541,12 @@ def _whisper_device_label(device: str) -> str:
 
 def _has_encoder(encoders: list[str], needle: str) -> bool:
     return any(needle in encoder for encoder in encoders)
+
+
+def _probe_nvidia_runtime():
+    from ffmpeg_tools.encoders import probe_nvidia_runtime
+
+    return probe_nvidia_runtime()
 
 
 def _gpu_likely_available() -> bool:
