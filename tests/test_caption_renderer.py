@@ -101,6 +101,8 @@ def test_overlay_filter_uses_one_input_per_caption() -> None:
 
 def test_render_caption_image_creates_transparent_border_and_white_center(tmp_path: Path) -> None:
     PIL = pytest.importorskip("PIL")  # noqa: N806
+    from PIL import Image
+
     _ = PIL
 
     cue = SubtitleCue(
@@ -120,6 +122,31 @@ def test_render_caption_image_creates_transparent_border_and_white_center(tmp_pa
     render_caption_image(cue, style, image_path)
 
     assert image_path.exists()
+
+    img = Image.open(image_path).convert("RGBA")
+    px = img.load()
+
+    box_points: list[tuple[int, int]] = []
+    text_points: list[tuple[int, int]] = []
+    for y in range(img.height):
+        for x in range(img.width):
+            r, g, b, a = px[x, y]
+            if a > 220:
+                if r > 240 and g > 240 and b > 240:
+                    box_points.append((x, y))
+                elif r < 120 and g < 120 and b < 120:
+                    text_points.append((x, y))
+
+    def _bbox(points: list[tuple[int, int]]) -> tuple[int, int, int, int]:
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        return min(xs), min(ys), max(xs) + 1, max(ys) + 1
+
+    box_bbox = _bbox(box_points)
+    text_bbox = _bbox(text_points)
+
+    assert abs(text_bbox[0] - (box_bbox[0] + style.padding_x)) <= 2
+    assert abs(text_bbox[1] - (box_bbox[1] + style.padding_y)) <= 2
 
 
 def test_burn_rounded_captions_builds_overlay_command_and_cleans_temp(tmp_path: Path, monkeypatch) -> None:

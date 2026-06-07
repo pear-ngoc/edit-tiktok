@@ -105,7 +105,7 @@ def process_video(
                 segment_mode = config.video.segment_mode.lower().strip()
                 if segment_mode in {"random", "scene"}:
                     with stage_scope(job_context, "BUILD_SEGMENT_PLAN", logger=LOGGER, mode=segment_mode):
-                        segments = _generate_segments(info.duration, config)
+                        segments = _generate_segments(input_file, info.duration, config)
                     try:
                         _run_segmented_pipeline(
                             input_file=input_file,
@@ -667,11 +667,13 @@ def _build_filter_complex(
     return filter_complex, maps
 
 
-def _generate_segments(duration: float, config: AppConfig) -> list[Segment]:
+def _generate_segments(input_file: Path, duration: float, config: AppConfig) -> list[Segment]:
     mode = config.video.segment_mode.lower().strip()
     if mode == "scene":
         return generate_scene_segments(
+            input_file,
             duration,
+            scene_threshold=config.video.scene_threshold,
             min_seconds=config.video.min_segment_seconds,
             max_seconds=config.video.max_segment_seconds,
         )

@@ -76,6 +76,14 @@ class CaptionFontResolution:
     warning: str | None = None
 
 
+@dataclass(slots=True)
+class CaptionLineMetrics:
+    width: int
+    height: int
+    left: int
+    top: int
+
+
 def available_caption_fonts(project_root: Path) -> list[Path]:
     font_dir = resolve_project_path(project_root, "assets/font")
     if not font_dir.exists():
@@ -184,17 +192,24 @@ def measure_caption_text(
     font: Any,
     stroke_width: int = 0,
     line_spacing: int = 4,
-) -> tuple[int, int, list[tuple[int, int]]]:
+) -> tuple[int, int, list[CaptionLineMetrics]]:
     image = _create_measure_image()
     draw = _image_draw(image)
-    line_sizes: list[tuple[int, int]] = []
+    line_sizes: list[CaptionLineMetrics] = []
     widths: list[int] = []
     heights: list[int] = []
     for line in lines:
         bbox = draw.textbbox((0, 0), line or " ", font=font, stroke_width=stroke_width)
         width = max(1, int(bbox[2] - bbox[0]))
         height = max(1, int(bbox[3] - bbox[1]))
-        line_sizes.append((width, height))
+        line_sizes.append(
+            CaptionLineMetrics(
+                width=width,
+                height=height,
+                left=int(bbox[0]),
+                top=int(bbox[1]),
+            )
+        )
         widths.append(width)
         heights.append(height)
     total_height = sum(heights) + max(0, len(lines) - 1) * line_spacing
@@ -300,18 +315,19 @@ def render_caption_image(
     text_block_y = box_y + style.padding_y + max(0, (box_height - style.padding_y * 2 - text_height) // 2)
     current_y = text_block_y
     for index, line in enumerate(cue_lines):
-        line_width, line_height = line_sizes[index]
-        text_x = box_x + max(0, (box_width - line_width) // 2)
+        line_metrics = line_sizes[index]
+        text_x = box_x + max(0, (box_width - line_metrics.width) // 2) - line_metrics.left
+        text_y = current_y - line_metrics.top
         stroke_fill = style.outline_color if stroke_width > 0 else None
         draw.text(
-            (text_x, current_y),
+            (text_x, text_y),
             line,
             font=font,
             fill=style.text_color,
             stroke_width=stroke_width,
             stroke_fill=stroke_fill,
         )
-        current_y += line_height + line_spacing
+        current_y += line_metrics.height + line_spacing
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(output_path)
