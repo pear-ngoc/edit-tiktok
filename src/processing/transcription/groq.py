@@ -58,6 +58,7 @@ def _redact_key(api_key: str) -> str:
 class _ChunkResult:
     segments: list[TranscriptionSegment]
     words: list[TranscriptionWord]
+    language: str | None
 
 
 @dataclass
@@ -77,6 +78,32 @@ def _parse_verbose_response(data: dict[str, Any]) -> _GroqVerboseResponse:
         segments=data.get("segments", []),
         words=data.get("words", []),
     )
+
+
+def _resolve_language(raw: _GroqVerboseResponse) -> str | None:
+    lang = raw.language
+    if lang is None:
+        return None
+    # Groq returns full names like "English", "Vietnamese"; normalize to codes
+    _LANG_MAP = {
+        "english": "en",
+        "vietnamese": "vi",
+        "japanese": "ja",
+        "korean": "ko",
+        "chinese": "zh",
+        "polish": "pl",
+        "french": "fr",
+        "german": "de",
+        "spanish": "es",
+        "portuguese": "pt",
+        "italian": "it",
+        "russian": "ru",
+        "thai": "th",
+        "indonesian": "id",
+        "malay": "ms",
+    }
+    normalized = lang.strip().lower()
+    return _LANG_MAP.get(normalized, lang)
 
 
 def _normalize_response(raw: _GroqVerboseResponse, chunk_offset: float = 0.0) -> _ChunkResult:
@@ -103,20 +130,27 @@ def _normalize_response(raw: _GroqVerboseResponse, chunk_offset: float = 0.0) ->
             )
         )
 
-    all_words: list[TranscriptionWord] = []
-    for w in raw.words:
-        word_text = str(w.get("word", "")).replace("\n", " ").strip()
-        if not word_text:
-            continue
-        all_words.append(
+    # Groq may not include a top-level `words` array; fall back to segment words
+    if raw.words:
+        all_words = [
             TranscriptionWord(
-                text=word_text,
+                text=str(w.get("word", "")).replace("\n", " ").strip(),
                 start=float(w.get("start", 0.0)) + chunk_offset,
                 end=float(w.get("end", 0.0)) + chunk_offset,
             )
-        )
+            for w in raw.words
+            if str(w.get("word", "")).replace("\n", " ").strip()
+        ]
+    else:
+        # Extract flat word list from segments (Groq default behavior)
+        all_words = []
+        for seg in segments:
+            all_words.extend(seg.words)
 
-    return _ChunkResult(segments=segments, words=all_words)
+    # Use the first successful chunk's language (normalized), fall back to requested language
+    resolved_lang = _resolve_language(raw)
+
+    return _ChunkResult(segments=segments, words=all_words, language=resolved_lang)
 
 
 def _deduplicate_words(words: list[TranscriptionWord]) -> list[TranscriptionWord]:
@@ -453,6 +487,7 @@ class GroqTranscriptionBackend:
             chunk_offset = 0.0
             successful_chunks = 0
 
+            first_language: str | None = None
             for i, chunk_path in enumerate(chunks):
                 chunk_result = _upload_and_transcribe_chunk(
                     chunk_path,
@@ -463,6 +498,9 @@ class GroqTranscriptionBackend:
                     total_chunks,
                     ctx,
                 )
+                if i == 0 and chunk_result.language:
+                    first_language = chunk_result.language
+
                 for seg in chunk_result.segments:
                     seg.start += chunk_offset
                     seg.end += chunk_offset
@@ -499,7 +537,7 @@ class GroqTranscriptionBackend:
                 )
 
             full_text = " ".join(seg.text for seg in all_segments)
-            detected_language = all_segments[0].words[0].text if all_segments and all_segments[0].words else None
+            detected_language = first_language
 
             LOGGER.info(
                 "%s [TRANSCRIBE] Groq completed | chunks=%s | segments=%s | words=%s | language=%s | elapsed=%.2fs",

@@ -968,3 +968,53 @@ def test_resolve_api_key_falls_back_to_config(
     monkeypatch.delenv("GROQ_API_KEY", raising=False)
     cfg = GroqTranscriptionConfig(api_key="sk-from-config")
     assert _resolve_api_key(cfg) == "sk-from-config"
+
+
+def test_resolve_language_normalizes_groq_names() -> None:
+    from processing.transcription.groq import _GroqVerboseResponse, _resolve_language
+
+    assert _resolve_language(_GroqVerboseResponse(language="English", text="", duration=0, segments=[], words=[])) == "en"
+    assert _resolve_language(_GroqVerboseResponse(language="Vietnamese", text="", duration=0, segments=[], words=[])) == "vi"
+    assert _resolve_language(_GroqVerboseResponse(language="Japanese", text="", duration=0, segments=[], words=[])) == "ja"
+    assert _resolve_language(_GroqVerboseResponse(language="Korean", text="", duration=0, segments=[], words=[])) == "ko"
+    assert _resolve_language(_GroqVerboseResponse(language="Chinese", text="", duration=0, segments=[], words=[])) == "zh"
+    assert _resolve_language(_GroqVerboseResponse(language="Spanish", text="", duration=0, segments=[], words=[])) == "es"
+    assert _resolve_language(_GroqVerboseResponse(language="French", text="", duration=0, segments=[], words=[])) == "fr"
+    assert _resolve_language(_GroqVerboseResponse(language=None, text="", duration=0, segments=[], words=[])) is None
+    # Unknown language falls through
+    assert _resolve_language(_GroqVerboseResponse(language="AncientSumerian", text="", duration=0, segments=[], words=[])) == "AncientSumerian"
+
+
+def test_groq_response_normalizes_without_top_level_words() -> None:
+    # Simulate Groq response that has no top-level `words` (only segment-level)
+    from processing.transcription.groq import _GroqVerboseResponse, _normalize_response
+
+    raw = _GroqVerboseResponse(
+        text="Don't forget to subscribe.",
+        language="English",
+        duration=1.968,
+        segments=[
+            {
+                "id": 0,
+                "text": " Don't forget to subscribe.",
+                "start": 0,
+                "end": 1.9599999,
+                "words": [
+                    {"word": "Don't", "start": 0.04, "end": 0.36},
+                    {"word": "forget", "start": 0.36, "end": 0.7},
+                    {"word": "to", "start": 0.7, "end": 1.1},
+                    {"word": "subscribe.", "start": 1.1, "end": 1.52},
+                ],
+            }
+        ],
+        words=[],  # No top-level words — Groq default
+    )
+
+    result = _normalize_response(raw)
+
+    assert len(result.segments) == 1
+    assert len(result.words) == 4
+    assert result.words[0].text == "Don't"
+    assert result.words[0].start == 0.04
+    assert result.words[-1].text == "subscribe."
+    assert result.segments[0].words[0].text == "Don't"
