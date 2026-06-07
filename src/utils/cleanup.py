@@ -60,6 +60,7 @@ def clear_workspace(
     dry_run: bool = False,
 ) -> CleanupResult:
     preserved_files = _read_preserved_files(project_root, config)
+    preserved_dirs = _move_preserved_dirs(project_root, config) if not dry_run else {}
     targets = build_clear_targets(
         project_root,
         config,
@@ -79,6 +80,7 @@ def clear_workspace(
         ensure_gitkeep_files(project_root)
         ensure_runtime_dirs(project_root, config)
         _restore_preserved_files(preserved_files)
+        _restore_preserved_dirs(preserved_dirs)
 
     return CleanupResult(removed_paths=removed, dry_run=dry_run)
 
@@ -98,3 +100,38 @@ def _restore_preserved_files(files: dict[Path, bytes]) -> None:
     for path, content in files.items():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(content)
+
+
+def _move_preserved_dirs(project_root: Path, config: AppConfig) -> dict[Path, Path]:
+    paths = [
+        project_root / "data" / "huggingface",
+    ]
+    preserved: dict[Path, Path] = {}
+    preserve_root = project_root / ".clear-preserve"
+    for path in paths:
+        if not path.exists() or not path.is_dir():
+            continue
+        relative = path.resolve().relative_to(project_root.resolve())
+        target = preserve_root / relative
+        if target.exists():
+            shutil.rmtree(target, ignore_errors=True)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(path), str(target))
+        preserved[path] = target
+    return preserved
+
+
+def _restore_preserved_dirs(dirs: dict[Path, Path]) -> None:
+    for original, preserved in dirs.items():
+        if not preserved.exists():
+            continue
+        if original.exists():
+            shutil.rmtree(original, ignore_errors=True)
+        original.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(preserved), str(original))
+    for preserved in set(dirs.values()):
+        root = preserved
+        while root.name and root.name != ".clear-preserve":
+            root = root.parent
+        if root.name == ".clear-preserve" and root.exists():
+            shutil.rmtree(root, ignore_errors=True)

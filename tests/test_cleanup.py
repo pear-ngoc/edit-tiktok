@@ -60,3 +60,19 @@ def test_clear_workspace_preserves_google_drive_oauth_token(tmp_path: Path) -> N
 
     assert (tmp_path / "data" / "google-drive-token.json").read_text(encoding="utf-8") == '{"token":"keep"}'
     assert not (tmp_path / "data" / "jobs.json").exists()
+
+
+def test_clear_workspace_preserves_huggingface_cache(tmp_path: Path) -> None:
+    config = default_config()
+    ensure_runtime_dirs(tmp_path, config)
+
+    _write(tmp_path / "data" / "huggingface" / "hub" / "model.bin", "cache")
+    _write(tmp_path / "data" / "jobs.json", "{}")
+    _write(tmp_path / "output" / "video.mp4", "video")
+
+    clear_workspace(tmp_path, config, include_input=True, include_generated=True)
+
+    assert (tmp_path / "data" / "huggingface" / "hub" / "model.bin").read_text(encoding="utf-8") == "cache"
+    assert not (tmp_path / "data" / "jobs.json").exists()
+    assert not (tmp_path / "output" / "video.mp4").exists()
+    assert not (tmp_path / ".clear-preserve").exists()
