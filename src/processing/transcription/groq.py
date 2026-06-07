@@ -71,12 +71,15 @@ class _GroqVerboseResponse:
 
 
 def _parse_verbose_response(data: dict[str, Any]) -> _GroqVerboseResponse:
+    # Groq may return null instead of [] for these fields
+    segments = data.get("segments")
+    words = data.get("words")
     return _GroqVerboseResponse(
         text=data.get("text", ""),
         language=data.get("language"),
         duration=data.get("duration"),
-        segments=data.get("segments", []),
-        words=data.get("words", []),
+        segments=segments if segments is not None else [],
+        words=words if words is not None else [],
     )
 
 
@@ -110,17 +113,19 @@ def _normalize_response(raw: _GroqVerboseResponse, chunk_offset: float = 0.0) ->
     segments: list[TranscriptionSegment] = []
     for seg in raw.segments:
         seg_words: list[TranscriptionWord] = []
-        for w in seg.get("words", []):
-            word_text = str(w.get("word", "")).replace("\n", " ").strip()
-            if not word_text:
-                continue
-            seg_words.append(
-                TranscriptionWord(
-                    text=word_text,
-                    start=float(w.get("start", 0.0)) + chunk_offset,
-                    end=float(w.get("end", 0.0)) + chunk_offset,
+        seg_word_list = seg.get("words")
+        if seg_word_list is not None:
+            for w in seg_word_list:
+                word_text = str(w.get("word", "")).replace("\n", " ").strip()
+                if not word_text:
+                    continue
+                seg_words.append(
+                    TranscriptionWord(
+                        text=word_text,
+                        start=float(w.get("start", 0.0)) + chunk_offset,
+                        end=float(w.get("end", 0.0)) + chunk_offset,
+                    )
                 )
-            )
         segments.append(
             TranscriptionSegment(
                 text=str(seg.get("text", "")).replace("\n", " ").strip(),

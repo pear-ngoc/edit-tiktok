@@ -1018,3 +1018,21 @@ def test_groq_response_normalizes_without_top_level_words() -> None:
     assert result.words[0].start == 0.04
     assert result.words[-1].text == "subscribe."
     assert result.segments[0].words[0].text == "Don't"
+
+
+def test_groq_handles_null_segments_and_words() -> None:
+    # Groq may return null instead of [] for segments/words
+    from processing.transcription.groq import _parse_verbose_response
+
+    data = {
+        "text": "Test",
+        "language": "en",
+        "duration": 1.0,
+        "segments": None,  # null instead of []
+        "words": None,  # null instead of []
+    }
+
+    parsed = _parse_verbose_response(data)
+    assert parsed.segments == []
+    assert parsed.words == []
+    assert parsed.text == "Test"
