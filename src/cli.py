@@ -342,6 +342,31 @@ def _process_parser() -> argparse.ArgumentParser:
         help="Kích thước model faster-whisper",
     )
     parser.add_argument(
+        "--transcription-backend",
+        dest="transcription_backend",
+        choices=["auto", "faster-whisper", "groq"],
+        help="Transcription backend: auto, faster-whisper, groq",
+    )
+    parser.add_argument(
+        "--groq-transcription-model",
+        dest="groq_transcription_model",
+        help="Groq transcription model (e.g. whisper-large-v3-turbo)",
+    )
+    groq_fallback_group = parser.add_mutually_exclusive_group()
+    groq_fallback_group.add_argument(
+        "--groq-fallback-local",
+        dest="groq_fallback_local",
+        action="store_true",
+        default=None,
+        help="Fallback sang local Faster-Whisper khi Groq thất bại",
+    )
+    groq_fallback_group.add_argument(
+        "--no-groq-fallback-local",
+        dest="groq_fallback_local",
+        action="store_false",
+        help="Không fallback sang local khi Groq thất bại",
+    )
+    parser.add_argument(
         "--caption-max-chars-per-line",
         dest="caption_max_chars_per_line",
         type=int,

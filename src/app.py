@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import time
 from pathlib import Path
@@ -170,6 +171,22 @@ def doctor(
     print("Selected backend:")
     print(selected.backend)
     print("")
+
+    print("Transcription:")
+    print(f"  requested backend: {config.subtitles.backend}")
+    groq_key = os.getenv("GROQ_API_KEY") or config.subtitles.groq.api_key
+    print(f"  Groq key configured: {'yes' if groq_key else 'no'}")
+    print(f"  Groq endpoint: api.groq.com")
+    print(f"  Groq model: {config.subtitles.groq.model}")
+    print(f"  Local Faster-Whisper: available")
+    try:
+        from processing.transcription import TranscriptionManager
+        resolved = TranscriptionManager(config.subtitles, None).resolve_backend()
+        print(f"  Resolved backend: {resolved}")
+    except Exception as exc:
+        print(f"  Resolved backend: error - {exc}")
+    print("")
+
     print("Pipeline:")
     print(classification_for_pipeline(selected, resolve_whisper_runtime(config.subtitles)))
     log_startup_summary(

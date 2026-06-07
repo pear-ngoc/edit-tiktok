@@ -129,7 +129,7 @@ encoder:
 
 subtitles:
   enabled: true
-  backend: faster-whisper
+  backend: auto
   model_size: medium
   language: auto
   output_srt: true
@@ -140,6 +140,27 @@ subtitles:
   compute_type: auto
   output_dir: output/subtitles
   word_timestamps: true
+  groq:
+    enabled: true
+    api_key: ""
+    base_url: "https://api.groq.com/openai/v1"
+    model: "whisper-large-v3-turbo"
+    temperature: 0
+    response_format: "verbose_json"
+    timestamp_granularities: [segment, word]
+    timeout_seconds: 600
+    connect_timeout_seconds: 30
+    retry_attempts: 3
+    retry_delay_seconds: 5
+    fallback_to_local: true
+    max_concurrent_requests: 2
+    audio_format: "mp3"
+    audio_sample_rate: 16000
+    audio_channels: 1
+    audio_bitrate: "96k"
+    chunking_enabled: true
+    chunk_duration_seconds: 600
+    chunk_overlap_seconds: 1.0
 
 formatting:
   max_chars_per_line: 20

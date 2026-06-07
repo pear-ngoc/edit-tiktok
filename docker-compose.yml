@@ -40,6 +40,7 @@ services:
       GOOGLE_OAUTH_CLIENT_SECRETS_FILE: ${GOOGLE_OAUTH_CLIENT_SECRETS_FILE:-/app/secrets/google-drive-oauth-client.json}
       GOOGLE_OAUTH_TOKEN_FILE: ${GOOGLE_OAUTH_TOKEN_FILE:-/app/data/google-drive-token.json}
       HF_HOME: ${HF_HOME:-/root/.cache/huggingface}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
       HUGGINGFACE_HUB_CACHE: ${HUGGINGFACE_HUB_CACHE:-/root/.cache/huggingface/hub}
     volumes:
       - ./input:/app/input

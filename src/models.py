@@ -131,9 +131,33 @@ class CpuConfig:
 
 
 @dataclass(slots=True)
+class GroqTranscriptionConfig:
+    enabled: bool = True
+    api_key: str = ""
+    base_url: str = "https://api.groq.com/openai/v1"
+    model: str = "whisper-large-v3-turbo"
+    temperature: float = 0.0
+    response_format: str = "verbose_json"
+    timestamp_granularities: list[str] = field(default_factory=lambda: ["segment", "word"])
+    timeout_seconds: int = 600
+    connect_timeout_seconds: int = 30
+    retry_attempts: int = 3
+    retry_delay_seconds: float = 5.0
+    fallback_to_local: bool = True
+    max_concurrent_requests: int = 2
+    audio_format: str = "mp3"
+    audio_sample_rate: int = 16000
+    audio_channels: int = 1
+    audio_bitrate: str = "96k"
+    chunking_enabled: bool = True
+    chunk_duration_seconds: int = 600
+    chunk_overlap_seconds: float = 1.0
+
+
+@dataclass(slots=True)
 class SubtitlesConfig:
     enabled: bool = True
-    backend: str = "faster-whisper"
+    backend: str = "auto"
     model_size: str = "medium"
     language: str = "auto"
     output_srt: bool = True
@@ -144,6 +168,7 @@ class SubtitlesConfig:
     compute_type: str = "auto"
     output_dir: str = "output/subtitles"
     word_timestamps: bool = True
+    groq: GroqTranscriptionConfig = field(default_factory=GroqTranscriptionConfig)
 
 
 @dataclass(slots=True)

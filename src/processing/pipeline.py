@@ -860,7 +860,14 @@ def _handle_subtitles(
     ffmpeg_debug: bool = False,
 ) -> Path:
     try:
-        _emit_progress(progress_callback, "generating_subtitles", "📝 Đang tạo phụ đề...")
+        from processing.transcription import TranscriptionManager
+
+        manager = TranscriptionManager(config.subtitles, None)
+        resolved_backend = manager.resolve_backend()
+        if resolved_backend == "groq":
+            _emit_progress(progress_callback, "generating_subtitles_groq", "📝 Đang tạo phụ đề bằng Groq...")
+        else:
+            _emit_progress(progress_callback, "generating_subtitles", "📝 Đang tạo phụ đề...")
         subtitle_result = generate_subtitles_for_video(
             output_file,
             config,

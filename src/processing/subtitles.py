@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import logging
-import platform
 import shutil
-import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -19,16 +17,14 @@ from ffmpeg_tools.filters import build_ass_burn_filter, build_subtitles_burn_fil
 from ffmpeg_tools.probe import probe_video
 from ffmpeg_tools.runner import FFmpegError, run_command
 from models import AppConfig, EncoderConfig, EncoderSelection, FormattingConfig, SubtitlesConfig
+from processing.transcription import TranscriptionManager
 from utils.runtime_logging import (
     JobRuntimeContext,
-    WhisperRuntimeSelection,
     job_context_scope,
     job_prefix,
-    resolve_whisper_runtime,
     stage_scope,
     stage_skip,
 )
-from utils.paths import resolve_project_path
 
 LOGGER = logging.getLogger(__name__)
 
@@ -90,13 +86,21 @@ def transcribe_media(
     config: SubtitlesConfig | AppConfig,
     formatting: FormattingConfig | None = None,
 ) -> list[SubtitleCue]:
+    from processing.transcription import TranscriptionManager
+
     subtitles_config, formatting_config = _resolve_subtitle_configs(config, formatting)
-    raw_segments, words, _ = _transcribe_media_words(media_path, subtitles_config)
+    manager = TranscriptionManager(subtitles_config, None)
+    result = manager.transcribe(media_path, subtitles_config.language)
+    words: list[SubtitleWord] = [
+        SubtitleWord(text=w.text, start=w.start, end=w.end)
+        for w in result.words
+    ]
     LOGGER.info(
-        "Phụ đề thô từ %s | raw_segments=%s | word_timestamps=%s",
+        "Phụ đề thô từ %s | raw_segments=%s | word_timestamps=%s | backend=%s",
         media_path,
-        len(raw_segments),
+        len(result.segments),
         len(words),
+        result.backend,
     )
     return split_words_into_caption_cues(
         words,
@@ -313,71 +317,53 @@ def generate_subtitles_for_video(
     if not subtitles_config.enabled:
         LOGGER.info("Phụ đề đã tắt, bỏ qua: %s", video_path)
         return None
-    if subtitles_config.backend != "faster-whisper":
-        LOGGER.warning(
-            "Backend phụ đề không được hỗ trợ trong v1: %s. Bỏ qua tạo phụ đề.",
-            subtitles_config.backend,
-        )
-        return None
 
     probe = probe_video(video_path)
     if not probe.has_audio:
         LOGGER.warning("Video không có audio, bỏ qua tạo phụ đề: %s", video_path)
         return None
 
-    subtitle_dir = resolve_project_path(project_root, subtitles_config.output_dir)
+    subtitle_dir = project_root / subtitles_config.output_dir
     subtitle_dir.mkdir(parents=True, exist_ok=True)
 
     stem = output_stem or video_path.stem
-    temp_audio_dir = temp_root / "subtitles"
-    temp_audio_dir.mkdir(parents=True, exist_ok=True)
-    temp_audio_path = temp_audio_dir / f"{stem}_{abs(hash(str(video_path)))}.wav"
-
-    whisper_runtime = resolve_whisper_runtime(subtitles_config)
-    LOGGER.info(
-        "%s [SUBTITLE] Model: %s | device_requested=%s | device_resolved=%s | compute_requested=%s | compute_resolved=%s | language_requested=%s",
-        job_prefix(job_context) if job_context else "[JOB -]",
-        subtitles_config.model_size,
-        whisper_runtime.requested_device,
-        whisper_runtime.resolved_device,
-        whisper_runtime.requested_compute_type,
-        whisper_runtime.resolved_compute_type,
-        subtitles_config.language,
-    )
-
     runtime_context = job_context or _fallback_job_context(video_path, subtitle_dir)
+
     with job_context_scope(runtime_context):
+        manager = TranscriptionManager(subtitles_config, runtime_context)
+        resolved_backend = manager.resolve_backend()
+        LOGGER.info(
+            "%s [TRANSCRIBE] Backend requested: %s | resolved: %s | model: %s | language: %s",
+            job_prefix(runtime_context),
+            subtitles_config.backend,
+            resolved_backend,
+            subtitles_config.groq.model if resolved_backend == "groq" else subtitles_config.model_size,
+            subtitles_config.language,
+        )
+
         try:
-            with stage_scope(runtime_context, "EXTRACT_OR_READ_AUDIO_FOR_STT", logger=LOGGER):
-                _extract_audio_track(video_path, temp_audio_path, debug=debug)
-            with stage_scope(runtime_context, "LOAD_WHISPER_MODEL", logger=LOGGER, start_level=logging.INFO):
-                whisper_model = _load_whisper_model(subtitles_config, whisper_runtime)
-            with stage_scope(runtime_context, "TRANSCRIBE_AUDIO", logger=LOGGER, start_level=logging.INFO):
-                raw_segments, words, detected_language = _transcribe_with_model(
-                    whisper_model,
-                    temp_audio_path,
-                    subtitles_config,
-                    job_context=job_context,
-                )
+            transcription_result = manager.transcribe(video_path, subtitles_config.language)
+            detected_language = transcription_result.language
+            raw_segments = [
+                {"text": seg.text, "start": seg.start, "end": seg.end, "words": seg.words}
+                for seg in transcription_result.segments
+            ]
+            words: list[SubtitleWord] = [
+                SubtitleWord(text=w.text, start=w.start, end=w.end)
+                for w in transcription_result.words
+            ]
+            LOGGER.info(
+                "%s [TRANSCRIBE] Backend used: %s | raw_segments=%s | word_timestamps=%s | detected=%s",
+                job_prefix(runtime_context),
+                transcription_result.backend,
+                len(raw_segments),
+                len(words),
+                detected_language or "unknown",
+            )
         except Exception as exc:
             LOGGER.exception("Lỗi khi tạo phụ đề cho %s", video_path)
             LOGGER.error("Chi tiết lỗi phụ đề: %s", exc)
-            try:
-                with stage_scope(runtime_context, "TRANSCRIBE_AUDIO", logger=LOGGER, fallback="video_input", start_level=logging.INFO):
-                    whisper_model = _load_whisper_model(subtitles_config, whisper_runtime)
-                    raw_segments, words, detected_language = _transcribe_with_model(
-                        whisper_model,
-                        video_path,
-                        subtitles_config,
-                        job_context=job_context,
-                    )
-            except Exception as fallback_exc:
-                LOGGER.exception("Tạo phụ đề thất bại hoàn toàn cho %s", video_path)
-                LOGGER.error("Chi tiết fallback phụ đề: %s", fallback_exc)
-                temp_audio_path.unlink(missing_ok=True)
-                return None
-        finally:
-            temp_audio_path.unlink(missing_ok=True)
+            return None
 
     if not words:
         LOGGER.warning("Không có word timestamps nào được tạo cho %s", video_path)
@@ -424,9 +410,9 @@ def generate_subtitles_for_video(
 
     max_lines_found = max((len(cue.lines) for cue in cues), default=0)
     LOGGER.info(
-        "Tạo phụ đề hoàn tất cho %s | model=%s | language=%s | detected=%s | raw_segments=%s | word_timestamps=%s | cues=%s | max_lines=%s",
+        "Tạo phụ đề hoàn tất cho %s | backend=%s | language=%s | detected=%s | raw_segments=%s | word_timestamps=%s | cues=%s | max_lines=%s",
         video_path,
-        subtitles_config.model_size,
+        transcription_result.backend,
         subtitles_config.language,
         detected_language or "unknown",
         len(raw_segments),
@@ -690,152 +676,7 @@ def format_ass_timestamp(seconds: float) -> str:
     return f"{hours:d}:{minutes:02}:{secs:02}.{centiseconds:02}"
 
 
-def _extract_audio_track(video_path: Path, audio_path: Path, *, debug: bool = False) -> Path:
-    audio_path.parent.mkdir(parents=True, exist_ok=True)
-    args = [
-        "ffmpeg",
-        "-y",
-        "-hide_banner",
-        "-i",
-        str(video_path),
-        "-vn",
-        "-ac",
-        "1",
-        "-ar",
-        "16000",
-        "-c:a",
-        "pcm_s16le",
-        str(audio_path),
-    ]
-    run_command(args, debug=debug)
-    return audio_path
-
-
-def _transcribe_media_words(
-    media_path: Path,
-    config: SubtitlesConfig,
-) -> tuple[list[Any], list[SubtitleWord], str | None]:
-    whisper_model = _load_whisper_model(config)
-    language = None if config.language == "auto" else config.language
-    segments, info = whisper_model.transcribe(
-        str(media_path),
-        language=language,
-        word_timestamps=True,
-        vad_filter=True,
-        beam_size=5,
-    )
-    raw_segments = list(segments)
-    words = _flatten_words(raw_segments)
-    detected_language = getattr(info, "language", None)
-    LOGGER.info(
-        "Đã transcribe %s | raw_segments=%s | words=%s | detected=%s",
-        media_path,
-        len(raw_segments),
-        len(words),
-        detected_language or "unknown",
-    )
-    return raw_segments, words, detected_language
-
-
-def _load_whisper_model(config: SubtitlesConfig, runtime: WhisperRuntimeSelection | None = None) -> Any:
-    try:
-        from faster_whisper import WhisperModel
-    except Exception as exc:  # pragma: no cover - import fallback
-        raise RuntimeError(
-            "faster-whisper chưa được cài đặt. Hãy cài phụ thuộc để bật phụ đề."
-        ) from exc
-
-    resolved_runtime = runtime or resolve_whisper_runtime(config)
-    requested_device = resolved_runtime.resolved_device
-    requested_compute = resolved_runtime.resolved_compute_type
-    model_name = config.model_size or "medium"
-    try:
-        LOGGER.info(
-            "Đang tải model faster-whisper: %s | device=%s | compute_type=%s",
-            model_name,
-            requested_device,
-            requested_compute,
-        )
-        return WhisperModel(
-            model_name,
-            device=requested_device,
-            compute_type=requested_compute,
-        )
-    except Exception as exc:
-        if requested_device == "cpu":
-            raise
-        LOGGER.warning("Không tải được device %s, fallback sang cpu: %s", requested_device, exc)
-        return WhisperModel(model_name, device="cpu", compute_type="int8")
-
-
-def _transcribe_with_model(
-    whisper_model: Any,
-    media_path: Path,
-    config: SubtitlesConfig,
-    *,
-    job_context: JobRuntimeContext | None = None,
-) -> tuple[list[Any], list[SubtitleWord], str | None]:
-    start = time.perf_counter()
-    language = None if config.language == "auto" else config.language
-    LOGGER.info(
-        "%s [SUBTITLE] Transcription start | media=%s | language=%s",
-        job_prefix(job_context) if job_context else "[JOB -]",
-        media_path,
-        language or "auto",
-    )
-    segments, info = whisper_model.transcribe(
-        str(media_path),
-        language=language,
-        word_timestamps=True,
-        vad_filter=True,
-        beam_size=5,
-    )
-    raw_segments = list(segments)
-    words = _flatten_words(raw_segments)
-    detected_language = getattr(info, "language", None)
-    LOGGER.info(
-        "%s [SUBTITLE] Transcription completed in %.2fs | raw_segments=%s | word_timestamps=%s | detected=%s",
-        job_prefix(job_context) if job_context else "[JOB -]",
-        time.perf_counter() - start,
-        len(raw_segments),
-        len(words),
-        detected_language or "unknown",
-    )
-    return raw_segments, words, detected_language
-
-
-def _fallback_job_context(video_path: Path, subtitle_dir: Path) -> JobRuntimeContext:
-    return JobRuntimeContext(
-        job_id=f"subtitle-{abs(hash(video_path.as_posix())):x}"[:12],
-        source="local_input",
-        input_path=video_path,
-        output_path=subtitle_dir,
-        worker_slot=None,
-        worker_total=None,
-        thread_name="subtitle-fallback",
-        pid=0,
-    )
-
-
-def _flatten_words(segments: list[Any]) -> list[SubtitleWord]:
-    words: list[SubtitleWord] = []
-    for segment in segments:
-        segment_words = getattr(segment, "words", None) or []
-        for word in segment_words:
-            text = _clean_whisper_token(getattr(word, "word", "") or getattr(word, "text", ""))
-            if not text:
-                continue
-            start = float(getattr(word, "start", getattr(segment, "start", 0.0)) or 0.0)
-            end = float(getattr(word, "end", getattr(segment, "end", start)) or start)
-            if end < start:
-                end = start
-            words.append(SubtitleWord(text=text, start=start, end=end))
-    return words
-
-
-def _clean_whisper_token(text: str) -> str:
-    return str(text).replace("\n", " ").strip()
-
+# --- Helper functions (kept for internal use by other modules) ---
 
 def _should_break_before_add(
     *,
@@ -878,7 +719,7 @@ def _build_caption_cue(
 def _join_words(words: list[SubtitleWord]) -> str:
     parts: list[str] = []
     for word in words:
-        token = _clean_whisper_token(word.text)
+        token = str(word.text).replace("\n", " ").strip()
         if not token:
             continue
         parts.append(token)
@@ -963,7 +804,7 @@ def _coerce_word(item: SubtitleWord | dict[str, Any] | Any) -> SubtitleWord | No
     end_value = float(end if end is not None else start_value)
     if end_value < start_value:
         end_value = start_value
-    return SubtitleWord(text=_clean_whisper_token(str(text)), start=start_value, end=end_value)
+    return SubtitleWord(text=str(text).replace("\n", " ").strip(), start=start_value, end=end_value)
 
 
 def _resolve_subtitle_configs(
@@ -1180,4 +1021,17 @@ def _escape_ass_text(text: str) -> str:
         .replace("{", r"\{")
         .replace("}", r"\}")
         .replace("\r", "")
+    )
+
+
+def _fallback_job_context(video_path: Path, subtitle_dir: Path) -> JobRuntimeContext:
+    return JobRuntimeContext(
+        job_id=f"subtitle-{abs(hash(video_path.as_posix())):x}"[:12],
+        source="local_input",
+        input_path=video_path,
+        output_path=subtitle_dir,
+        worker_slot=None,
+        worker_total=None,
+        thread_name="subtitle-fallback",
+        pid=0,
     )

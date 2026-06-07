@@ -16,6 +16,7 @@ from models import (
     ColorConfig,
     CpuConfig,
     EncoderConfig,
+    GroqTranscriptionConfig,
     MetadataConfig,
     FormattingConfig,
     LoggingConfig,
@@ -106,6 +107,12 @@ def _load_raw_config(path: Path) -> dict[str, Any]:
 
 def config_from_dict(data: dict[str, Any]) -> AppConfig:
     storage = _storage_section(data.get("storage", {}))
+    subtitles_raw = data.get("subtitles", {})
+    groq_config = _section(GroqTranscriptionConfig, subtitles_raw.get("groq", {}), section_name="subtitles.groq")
+    subtitles = SubtitlesConfig(
+        **{k: v for k, v in subtitles_raw.items() if k != "groq"},
+        groq=groq_config,
+    )
     return AppConfig(
         processing=_section(ProcessingConfig, data.get("processing", {}), section_name="processing"),
         queue=_section(QueueConfig, data.get("queue", {}), section_name="queue"),
@@ -114,7 +121,7 @@ def config_from_dict(data: dict[str, Any]) -> AppConfig:
         audio=_section(AudioConfig, data.get("audio", {}), section_name="audio"),
         metadata=_section(MetadataConfig, data.get("metadata", {}), section_name="metadata"),
         encoder=_section(EncoderConfig, data.get("encoder", {}), section_name="encoder"),
-        subtitles=_section(SubtitlesConfig, data.get("subtitles", {}), section_name="subtitles"),
+        subtitles=subtitles,
         telegram=_section(TelegramConfig, data.get("telegram", {}), section_name="telegram"),
         storage=storage,
         revid_api=_section(RevidAPIConfig, data.get("revid_api", {}), section_name="revid_api"),
@@ -144,6 +151,9 @@ def apply_overrides(config: AppConfig, overrides: dict[str, Any]) -> AppConfig:
         "lut": ("color", "selected_luts"),
         "subtitle_language": ("subtitles", "language"),
         "whisper_model": ("subtitles", "model_size"),
+        "transcription_backend": ("subtitles", "backend"),
+        "groq_transcription_model": ("subtitles", "groq", "model"),
+        "groq_fallback_local": ("subtitles", "groq", "fallback_to_local"),
         "caption_max_chars_per_line": ("formatting", "max_chars_per_line"),
         "caption_max_lines": ("formatting", "max_lines"),
         "caption_max_words": ("formatting", "max_words_per_cue"),
@@ -240,6 +250,7 @@ def apply_environment_overrides(config: AppConfig) -> AppConfig:
     google_drive_auth_method = os.getenv("GOOGLE_DRIVE_AUTH_METHOD", "").strip()
     google_oauth_client = os.getenv("GOOGLE_OAUTH_CLIENT_SECRETS_FILE", "").strip()
     google_oauth_token = os.getenv("GOOGLE_OAUTH_TOKEN_FILE", "").strip()
+    groq_key = os.getenv("GROQ_API_KEY", "").strip()
     if telegram_token and not data["telegram"].get("bot_token"):
         data["telegram"]["bot_token"] = telegram_token
     if telegram_api_base_url and not data["telegram"].get("api_base_url"):
@@ -260,6 +271,8 @@ def apply_environment_overrides(config: AppConfig) -> AppConfig:
         data["storage"]["google_drive"]["oauth_client_secrets_file"] = google_oauth_client
     if google_oauth_token:
         data["storage"]["google_drive"]["oauth_token_file"] = google_oauth_token
+    if groq_key and not data["subtitles"]["groq"].get("api_key"):
+        data["subtitles"]["groq"]["api_key"] = groq_key
     return config_from_dict(data)
 
 
