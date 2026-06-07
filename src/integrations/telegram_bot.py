@@ -12,7 +12,9 @@ from typing import Any
 from integrations.revid_api import (
     download_video_from_url,
     fetch_tiktok_download_info,
+    fetch_tiktokdl_info,
     select_download_url,
+    select_tiktokdl_url,
 )
 from integrations.tiktok import extract_tiktok_urls
 from models import AppConfig, JobSource, JobStatus, ProcessResult, VideoJob
@@ -25,6 +27,8 @@ LOGGER = logging.getLogger(__name__)
 
 _STAGE_TEXTS = {
     "downloading": lambda job, *_: f"⏳ Đã nhận link TikTok, đang tải xuống... {job.original_url or ''}".strip(),
+    "downloading_revid": lambda job, *_: "⏳ Đang tải xuống (Revid API)...",
+    "downloading_fallback": lambda job, *_: "⏳ Revid thất bại, thử tiktokdl...",
     "queued": lambda job, *_: "✅ Tải xuống hoàn tất\n🕒 Video đang chờ trong hàng đợi...",
     "processing": lambda job, *_: f"🎬 Đang xử lý video...\nTên file: {Path(job.input_path).name}",
     "generating_subtitles": lambda job, *_: "📝 Đang tạo phụ đề...",
@@ -54,6 +58,7 @@ class TelegramBotService:
         self.queue_manager = queue_manager
         self.telegram_config = config.telegram
         self.revid_config = config.revid_api
+        self.tiktokdl_config = config.tiktokdl_fallback
         self.input_dir = resolve_project_path(project_root, self.telegram_config.input_subdir)
         self.input_dir.mkdir(parents=True, exist_ok=True)
         ensure_runtime_dirs(project_root, config)
@@ -306,6 +311,7 @@ class TelegramBotService:
             )
             if self.telegram_config.send_progress_messages:
                 initial_message = await self._send_initial_status_message(chat_id, initial_text)
+            # Try Revid API first
             payload = await asyncio.to_thread(
                 fetch_tiktok_download_info,
                 url,
@@ -315,14 +321,52 @@ class TelegramBotService:
             )
             download_url = select_download_url(payload)
             uploader = str(payload[0].get("uploader") or "tiktok")
-            file_name = sanitize_filename(f"tiktok_{uploader}.mp4")
-            target_path = unique_path(self.input_dir / file_name)
-            await asyncio.to_thread(
-                download_video_from_url,
-                download_url,
-                target_path,
-                self.revid_config.download_timeout_seconds,
-            )
+            timeout_seconds = self.revid_config.download_timeout_seconds
+
+            if self.tiktokdl_config.enabled:
+                try:
+                    target_path = unique_path(self.input_dir / f"tiktok_{uploader}.mp4")
+                    await asyncio.to_thread(download_video_from_url, download_url, target_path, timeout_seconds)
+                except Exception:
+                    LOGGER.warning("Revid download thất bại, thử tiktokdl cho %s", url)
+                    if initial_message is not None:
+                        await self._edit_message_text(
+                            chat_id=chat_id,
+                            message_id=initial_message.message_id,
+                            text=self._stage_text(
+                                VideoJob(
+                                    job_id="pending",
+                                    source=JobSource.TELEGRAM_TIKTOK,
+                                    status=JobStatus.PENDING,
+                                    input_path="",
+                                    original_url=url,
+                                    telegram_chat_id=chat_id,
+                                    chat_id=chat_id,
+                                ),
+                                "downloading_fallback",
+                            ),
+                        )
+                    tiktokdl_data = await asyncio.to_thread(
+                        fetch_tiktokdl_info,
+                        url,
+                        self.tiktokdl_config.endpoint,
+                        self.tiktokdl_config.tkdl_nonce,
+                        self.tiktokdl_config.timeout_seconds,
+                    )
+                    download_url = select_tiktokdl_url(tiktokdl_data)
+                    uploader = str(
+                        tiktokdl_data.get("author", {}).get("unique_id", "tiktok")
+                        if isinstance(tiktokdl_data.get("author"), dict)
+                        else "tiktok"
+                    )
+                    timeout_seconds = self.tiktokdl_config.download_timeout_seconds
+                    target_path = unique_path(self.input_dir / f"tiktok_{uploader}.mp4")
+                    await asyncio.to_thread(download_video_from_url, download_url, target_path, timeout_seconds)
+                    payload = tiktokdl_data
+                    LOGGER.info("Đã tải TikTok bằng tiktokdl fallback | chat_id=%s | url=%s", chat_id, url)
+            else:
+                target_path = unique_path(self.input_dir / f"tiktok_{uploader}.mp4")
+                await asyncio.to_thread(download_video_from_url, download_url, target_path, timeout_seconds)
             LOGGER.info(
                 "Đã tải TikTok về input/telegram | chat_id=%s | url=%s | path=%s",
                 chat_id,
@@ -386,7 +430,7 @@ class TelegramBotService:
     def _save_download_metadata(
         self,
         job: VideoJob,
-        payload: list[dict[str, object]],
+        payload: list[dict[str, object]] | dict[str, object],
         download_url: str,
     ) -> None:
         metadata_dir = self.project_root / "data" / "downloads"

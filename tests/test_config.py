@@ -22,7 +22,7 @@ def test_config_created_when_missing(tmp_path: Path) -> None:
     assert config.formatting.max_chars_per_line == 20
     assert config.formatting.max_lines == 2
     assert config.formatting.max_words_per_cue == 7
-    assert config.formatting.caption_font_size == 58
+    assert config.formatting.caption_font_size == 54
     assert config.logging.level == "INFO"
     assert config.logging.per_job_logs is True
     assert config.logging.retain_failed_temp is True

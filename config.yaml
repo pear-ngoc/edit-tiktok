@@ -73,6 +73,13 @@ revid_api:
   timeout_seconds: 60
   download_timeout_seconds: 300
 
+tiktokdl_fallback:
+  enabled: false
+  endpoint: "https://tiktokios.id/wp-admin/admin-ajax.php"
+  tkdl_nonce: "458d52a803"
+  timeout_seconds: 60
+  download_timeout_seconds: 300
+
 video:
   aspect_ratio: "9:16"
   mode: "blur"

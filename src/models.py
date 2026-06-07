@@ -240,6 +240,15 @@ class RevidAPIConfig:
 
 
 @dataclass(slots=True)
+class TiktokdlFallbackConfig:
+    enabled: bool = False
+    endpoint: str = "https://tiktokios.id/wp-admin/admin-ajax.php"
+    tkdl_nonce: str = "458d52a803"
+    timeout_seconds: int = 60
+    download_timeout_seconds: int = 300
+
+
+@dataclass(slots=True)
 class FormattingConfig:
     max_chars_per_line: int = 20
     max_lines: int = 2
@@ -290,6 +299,7 @@ class AppConfig:
     telegram: TelegramConfig = field(default_factory=TelegramConfig)
     storage: StorageConfig = field(default_factory=StorageConfig)
     revid_api: RevidAPIConfig = field(default_factory=RevidAPIConfig)
+    tiktokdl_fallback: TiktokdlFallbackConfig = field(default_factory=TiktokdlFallbackConfig)
     formatting: FormattingConfig = field(default_factory=FormattingConfig)
     runtime: RuntimeConfig = field(default_factory=RuntimeConfig)
     nvidia: NvidiaConfig = field(default_factory=NvidiaConfig)

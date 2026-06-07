@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+import urllib.request
 from contextlib import suppress
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 LOGGER = logging.getLogger(__name__)
@@ -80,3 +81,68 @@ def download_video_from_url(video_url: str, output_path: Path, timeout: int = 30
     tmp_path.replace(output_path)
     LOGGER.info("Đã tải video: %s -> %s", video_url, output_path)
     return output_path
+
+
+# ---------------------------------------------------------------------------
+# tiktokdl fallback (https://tiktokios.id)
+# ---------------------------------------------------------------------------
+
+
+def fetch_tiktokdl_info(
+    tiktok_url: str,
+    endpoint: str,
+    tkdl_nonce: str,
+    timeout: int = 60,
+) -> dict[str, object]:
+    body = urlencode({
+        "action": "tkdl_download",
+        "tkdl_nonce": tkdl_nonce,
+        "url": tiktok_url,
+    }).encode("utf-8")
+
+    request = Request(
+        endpoint,
+        data=body,
+        method="POST",
+        headers={
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+            "Accept": "*/*",
+            "Content-Type": "application/x-www-form-urlencoded",
+        },
+    )
+
+    try:
+        with urlopen(request, timeout=timeout) as response:
+            raw = response.read().decode("utf-8", errors="replace")
+    except HTTPError as exc:
+        body_err = ""
+        with suppress(Exception):
+            body_err = exc.read().decode("utf-8", errors="replace")[:500]
+        LOGGER.error("tiktokdl API lỗi HTTP %s cho %s | body=%s", exc.code, tiktok_url, body_err)
+        raise RuntimeError(f"tiktokdl API lỗi HTTP {exc.code}") from exc
+    except URLError as exc:
+        LOGGER.error("Không kết nối được tiktokdl cho %s: %s", tiktok_url, exc)
+        raise RuntimeError("Không kết nối được tiktokdl") from exc
+
+    payload = json.loads(raw)
+    if not isinstance(payload, dict):
+        raise RuntimeError("Phản hồi tiktokdl không hợp lệ")
+    if not payload.get("success"):
+        raise RuntimeError(f"tiktokdl báo thất bại: {payload}")
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        raise RuntimeError("tiktokdl không trả data hợp lệ")
+    return data
+
+
+def select_tiktokdl_url(data: dict[str, object]) -> str:
+    hdplay = str(data.get("hdplay") or "").strip()
+    if hdplay:
+        return hdplay
+    play = str(data.get("play") or "").strip()
+    if play:
+        return play
+    wmplay = str(data.get("wmplay") or "").strip()
+    if wmplay:
+        return wmplay
+    raise RuntimeError("tiktokdl không trả hdplay / play / wmplay")
