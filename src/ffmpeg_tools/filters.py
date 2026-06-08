@@ -1,6 +1,15 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
+
+
+@dataclass(frozen=True, slots=True)
+class CropRectangle:
+    crop_width: int
+    crop_height: int
+    crop_x: int
+    crop_y: int
 
 
 def parse_aspect_ratio(value: str) -> tuple[int, int]:
@@ -50,6 +59,66 @@ def choose_output_resolution(
     return _even(source_width), _even(source_height)
 
 
+def calculate_center_crop(
+    input_width: int,
+    input_height: int,
+    target_aspect: str,
+) -> CropRectangle:
+    if input_width <= 0 or input_height <= 0:
+        raise ValueError("Kích thước đầu vào không hợp lệ")
+    aspect_w, aspect_h = parse_aspect_ratio(target_aspect)
+    target_ratio = aspect_w / aspect_h
+    input_ratio = input_width / input_height
+
+    if input_ratio < target_ratio:
+        crop_width = _even(input_width)
+        crop_height = _even(round(crop_width / target_ratio))
+        crop_height = min(crop_height, _even(input_height))
+        crop_x = 0
+        crop_y = max(0, (input_height - crop_height) // 2)
+    elif input_ratio > target_ratio:
+        crop_height = _even(input_height)
+        crop_width = _even(round(crop_height * target_ratio))
+        crop_width = min(crop_width, _even(input_width))
+        crop_x = max(0, (input_width - crop_width) // 2)
+        crop_y = 0
+    else:
+        crop_width = _even(input_width)
+        crop_height = _even(input_height)
+        crop_x = max(0, (input_width - crop_width) // 2)
+        crop_y = max(0, (input_height - crop_height) // 2)
+
+    return CropRectangle(
+        crop_width=max(2, crop_width),
+        crop_height=max(2, crop_height),
+        crop_x=max(0, crop_x),
+        crop_y=max(0, crop_y),
+    )
+
+
+def suggest_center_crop_aspect_ratio(
+    input_width: int,
+    input_height: int,
+    candidates: tuple[str, ...] = ("3:4", "4:3"),
+) -> str:
+    if input_width <= 0 or input_height <= 0:
+        return candidates[0]
+    input_ratio = input_width / input_height
+    best_candidate = candidates[0]
+    best_distance = float("inf")
+    for candidate in candidates:
+        try:
+            aspect_w, aspect_h = parse_aspect_ratio(candidate)
+        except ValueError:
+            continue
+        candidate_ratio = aspect_w / aspect_h
+        distance = abs(input_ratio - candidate_ratio)
+        if distance < best_distance:
+            best_distance = distance
+            best_candidate = candidate
+    return best_candidate
+
+
 def build_crop_filter(width: int, height: int) -> str:
     return (
         f"scale={width}:{height}:force_original_aspect_ratio=increase,"
@@ -57,13 +126,37 @@ def build_crop_filter(width: int, height: int) -> str:
     )
 
 
-def build_cinematic_blur_filter(width: int, height: int, blur_sigma: int = 30) -> str:
+def build_cinematic_blur_filter(
+    width: int,
+    height: int,
+    *,
+    foreground_aspect_ratio: str = "3:4",
+    blur_sigma: int = 30,
+) -> str:
     return (
         f"split=2[bg][fg];"
         f"[bg]scale={width}:{height}:force_original_aspect_ratio=increase,"
         f"crop={width}:{height},gblur=sigma={blur_sigma}[bg];"
         f"[fg]scale={width}:{height}:force_original_aspect_ratio=decrease[fg];"
         f"[bg][fg]overlay=(W-w)/2:(H-h)/2,setsar=1"
+    )
+
+
+def build_center_crop_blur_filter(
+    width: int,
+    height: int,
+    *,
+    foreground_aspect_ratio: str = "3:4",
+    blur_sigma: int = 30,
+    crop: CropRectangle | None = None,
+) -> str:
+    crop_rect = crop or calculate_center_crop(width, height, foreground_aspect_ratio)
+    return (
+        f"split=2[background][foreground];"
+        f"[foreground]crop={crop_rect.crop_width}:{crop_rect.crop_height}:"
+        f"{crop_rect.crop_x}:{crop_rect.crop_y},setsar=1[sharp_foreground];"
+        f"[background]gblur=sigma={blur_sigma}[blurred_background];"
+        f"[blurred_background][sharp_foreground]overlay=(W-w)/2:(H-h)/2,setsar=1"
     )
 
 
@@ -76,6 +169,9 @@ def build_segment_video_filter(
     mode: str,
     width: int,
     height: int,
+    foreground_aspect_ratio: str = "3:4",
+    background_blur_sigma: int = 30,
+    crop: CropRectangle | None = None,
     zoom: float,
     horizontal_flip: bool,
     fade_seconds: float,
@@ -86,7 +182,16 @@ def build_segment_video_filter(
     noise_overlay: bool,
     noise_alpha: float,
 ) -> str:
-    filters: list[str] = [build_base_video_filter(mode, width, height)]
+    filters: list[str] = [
+        build_base_video_filter(
+            mode,
+            width,
+            height,
+            foreground_aspect_ratio=foreground_aspect_ratio,
+            background_blur_sigma=background_blur_sigma,
+            crop=crop,
+        )
+    ]
     segment_transform = build_segment_transform_filter(
         zoom=zoom,
         horizontal_flip=horizontal_flip,
@@ -218,12 +323,27 @@ def _even(value: int) -> int:
     return max(2, value - (value % 2))
 
 
-def build_base_video_filter(mode: str, width: int, height: int) -> str:
+def build_base_video_filter(
+    mode: str,
+    width: int,
+    height: int,
+    foreground_aspect_ratio: str = "3:4",
+    background_blur_sigma: int = 30,
+    crop: CropRectangle | None = None,
+) -> str:
     normalized = mode.lower()
     if normalized in {"crop", "simple_crop"}:
         return build_crop_filter(width, height)
     if normalized in {"blur", "cinematic_blur"}:
-        return build_cinematic_blur_filter(width, height)
+        return build_cinematic_blur_filter(width, height, foreground_aspect_ratio=foreground_aspect_ratio)
+    if normalized == "center_crop_blur":
+        return build_center_crop_blur_filter(
+            width,
+            height,
+            foreground_aspect_ratio=foreground_aspect_ratio,
+            blur_sigma=background_blur_sigma,
+            crop=crop,
+        )
     if normalized in {"original", "keep", "target"}:
         return build_keep_or_target_filter(width, height)
     raise ValueError(f"Chế độ video không được hỗ trợ: {mode}")

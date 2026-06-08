@@ -18,11 +18,14 @@ from ffmpeg_tools.filters import (
     build_audio_filter,
     build_base_video_filter,
     build_color_adjust_filter,
+    build_center_crop_blur_filter,
+    calculate_center_crop,
     build_lut_filter,
     build_noise_overlay_filter,
     build_segment_video_filter,
     build_speed_filter,
     choose_output_resolution,
+    suggest_center_crop_aspect_ratio,
 )
 from ffmpeg_tools.probe import probe_video
 from ffmpeg_tools.runner import FFmpegError, run_command
@@ -106,26 +109,12 @@ def process_video(
                 if segment_mode in {"random", "scene"}:
                     with stage_scope(job_context, "BUILD_SEGMENT_PLAN", logger=LOGGER, mode=segment_mode):
                         segments = _generate_segments(input_file, info.duration, config)
-                    try:
-                        _run_segmented_pipeline(
-                            input_file=input_file,
-                            output_file=output_file,
-                            info=info,
-                            project_root=project_root,
-                            config=config,
-                            lut_paths=lut_paths or [],
-                            work_dir=work_dir,
-                            encoder=encoder,
-                            width=width,
-                            height=height,
-                            segments=segments,
-                            job_context=job_context,
-                            ffmpeg_debug=ffmpeg_debug,
-                        )
-                    except Exception as segment_exc:
-                        LOGGER.warning(
-                            "Luồng xử lý theo đoạn thất bại, chuyển sang xử lý một lượt: %s",
-                            segment_exc,
+                    if len(segments) <= 1:
+                        stage_skip(
+                            job_context,
+                            "SEGMENTED_PIPELINE",
+                            "not enough clear scene cuts" if segment_mode == "scene" else "not enough segments",
+                            logger=LOGGER,
                         )
                         _run_single_pass(
                             source_file=input_file,
@@ -133,6 +122,7 @@ def process_video(
                             info=info,
                             project_root=project_root,
                             config=config,
+                            job=job,
                             encoder=encoder,
                             width=width,
                             height=height,
@@ -141,6 +131,44 @@ def process_video(
                             job_context=job_context,
                             ffmpeg_debug=ffmpeg_debug,
                         )
+                    else:
+                        try:
+                            _run_segmented_pipeline(
+                                input_file=input_file,
+                                output_file=output_file,
+                                info=info,
+                                project_root=project_root,
+                                config=config,
+                                job=job,
+                                lut_paths=lut_paths or [],
+                                work_dir=work_dir,
+                                encoder=encoder,
+                                width=width,
+                                height=height,
+                                segments=segments,
+                                job_context=job_context,
+                                ffmpeg_debug=ffmpeg_debug,
+                            )
+                        except Exception as segment_exc:
+                            LOGGER.warning(
+                                "Luồng xử lý theo đoạn thất bại, chuyển sang xử lý một lượt: %s",
+                                segment_exc,
+                            )
+                            _run_single_pass(
+                                source_file=input_file,
+                                output_file=output_file,
+                                info=info,
+                                project_root=project_root,
+                                config=config,
+                                job=job,
+                                encoder=encoder,
+                                width=width,
+                                height=height,
+                                apply_visual_effects=True,
+                                lut_paths=lut_paths or [],
+                                job_context=job_context,
+                                ffmpeg_debug=ffmpeg_debug,
+                            )
                 else:
                     _run_single_pass(
                         source_file=input_file,
@@ -148,6 +176,7 @@ def process_video(
                         info=info,
                         project_root=project_root,
                         config=config,
+                        job=job,
                         encoder=encoder,
                         width=width,
                         height=height,
@@ -190,13 +219,7 @@ def process_video(
 
 
 def _prepare_encoder(info: VideoInfo, config: AppConfig) -> tuple[EncoderSelection, int, int, list[str]]:
-    width, height = choose_output_resolution(
-        info.width,
-        info.height,
-        config.video.aspect_ratio,
-        config.video.target_resolution,
-        config.video.keep_original_resolution or config.video.mode == "original",
-    )
+    width, height = _resolve_output_dimensions(info, config)
     available_encoders = detect_available_encoders()
     encoder = select_encoder(
         config.encoder,
@@ -212,6 +235,18 @@ def _prepare_encoder(info: VideoInfo, config: AppConfig) -> tuple[EncoderSelecti
     return encoder, width, height, available_encoders
 
 
+def _resolve_output_dimensions(info: VideoInfo, config: AppConfig) -> tuple[int, int]:
+    if config.video.mode == "center_crop_blur":
+        return _even(info.width), _even(info.height)
+    return choose_output_resolution(
+        info.width,
+        info.height,
+        config.video.aspect_ratio,
+        config.video.target_resolution,
+        config.video.keep_original_resolution or config.video.mode == "original",
+    )
+
+
 def _run_segmented_pipeline(
     *,
     input_file: Path,
@@ -219,6 +254,7 @@ def _run_segmented_pipeline(
     info: VideoInfo,
     project_root: Path,
     config: AppConfig,
+    job: VideoJob | None,
     work_dir: Path,
     encoder: EncoderSelection,
     width: int,
@@ -240,6 +276,18 @@ def _run_segmented_pipeline(
     if segment_mode != "none":
         LOGGER.info("%s SEGMENTS Started | count=%s", job_prefix(job_context), len(segments))
 
+    center_crop = None
+    center_crop_blur = config.video.mode == "center_crop_blur"
+    foreground_ratio = config.video.center_crop_blur.foreground_aspect_ratio
+    if center_crop_blur:
+        foreground_ratio = _resolve_center_crop_foreground_ratio(info, config, job)
+        center_crop = calculate_center_crop(
+            info.width,
+            info.height,
+            foreground_ratio,
+        )
+        _log_center_crop_blur_layout(info, width, height, config, center_crop, foreground_ratio, job)
+
     for segment in segments:
         segment_file = segments_dir / f"segment_{segment.index:03d}.mp4"
         segment_files.append(segment_file)
@@ -249,6 +297,9 @@ def _run_segmented_pipeline(
             mode=config.video.mode,
             width=width,
             height=height,
+            foreground_aspect_ratio=foreground_ratio,
+            background_blur_sigma=config.video.center_crop_blur.background_blur_sigma,
+            crop=center_crop,
             zoom=segment_zoom,
             horizontal_flip=flip,
             fade_seconds=config.video.fade_seconds,
@@ -296,6 +347,7 @@ def _run_segmented_pipeline(
         info=concat_info,
         project_root=project_root,
         config=config,
+        job=job,
         encoder=encoder,
         width=width,
         height=height,
@@ -441,6 +493,7 @@ def _run_single_pass(
     info: VideoInfo,
     project_root: Path,
     config: AppConfig,
+    job: VideoJob | None,
     encoder: EncoderSelection,
     width: int,
     height: int,
@@ -461,6 +514,7 @@ def _run_single_pass(
             bgm=bgm,
             config=config,
             apply_visual_effects=apply_visual_effects,
+            job=job,
             job_context=job_context,
         )
 
@@ -548,6 +602,7 @@ def _run_single_pass(
             bgm=bgm,
             config=config,
             apply_visual_effects=apply_visual_effects,
+            job=job,
             job_context=job_context,
         )
         args.extend(["-filter_complex", filter_complex])
@@ -578,6 +633,7 @@ def _build_filter_complex(
     bgm: Path | None,
     config: AppConfig,
     apply_visual_effects: bool,
+    job: VideoJob | None,
     job_context: JobRuntimeContext,
 ) -> tuple[str, list[str]]:
     parts: list[str] = []
@@ -587,7 +643,32 @@ def _build_filter_complex(
     video_filters: list[str] = []
     if apply_visual_effects:
         with stage_scope(job_context, "APPLY_CROP_OR_BLUR", logger=LOGGER, mode=config.video.mode):
-            video_filters.append(build_base_video_filter(config.video.mode, width, height))
+            if config.video.mode == "center_crop_blur":
+                foreground_ratio = _resolve_center_crop_foreground_ratio(info, config, job)
+                crop = calculate_center_crop(
+                    info.width,
+                    info.height,
+                    foreground_ratio,
+                )
+                _log_center_crop_blur_layout(info, width, height, config, crop, foreground_ratio, job)
+                video_filters.append(
+                    build_center_crop_blur_filter(
+                        width,
+                        height,
+                        foreground_aspect_ratio=foreground_ratio,
+                        blur_sigma=config.video.center_crop_blur.background_blur_sigma,
+                        crop=crop,
+                    )
+                )
+            else:
+                video_filters.append(
+                    build_base_video_filter(
+                        config.video.mode,
+                        width,
+                        height,
+                        foreground_aspect_ratio=config.video.foreground_aspect_ratio,
+                    )
+                )
     else:
         stage_skip(job_context, "APPLY_CROP_OR_BLUR", "apply_visual_effects=false", logger=LOGGER)
 
@@ -685,9 +766,66 @@ def _generate_segments(input_file: Path, duration: float, config: AppConfig) -> 
 
 
 def _segment_zoom(config: AppConfig, index: int) -> float:
+    if config.video.mode == "center_crop_blur" and not config.video.center_crop_blur.allow_foreground_zoom:
+        return 1.0
     zoom_choices = config.video.alternating_zoom or [1.0]
     multiplier = zoom_choices[index % len(zoom_choices)]
     return max(1.0, config.video.base_zoom * multiplier)
+
+
+def _resolve_center_crop_foreground_ratio(
+    info: VideoInfo,
+    config: AppConfig,
+    job: VideoJob | None,
+) -> str:
+    if job is not None and job.source == JobSource.TELEGRAM_TIKTOK:
+        return suggest_center_crop_aspect_ratio(info.width, info.height)
+    return config.video.center_crop_blur.foreground_aspect_ratio
+
+
+def _log_center_crop_blur_layout(
+    info: VideoInfo,
+    width: int,
+    height: int,
+    config: AppConfig,
+    crop: "CropRectangle",
+    foreground_ratio: str,
+    job: VideoJob | None,
+) -> None:
+    auto_selected = job is not None and job.source == JobSource.TELEGRAM_TIKTOK
+    LOGGER.info(
+        "CENTER_CROP_BLUR Input: %sx%s | ratio=%s",
+        info.width,
+        info.height,
+        info.display_aspect_ratio or f"{info.width}:{info.height}",
+    )
+    LOGGER.info("CENTER_CROP_BLUR Output canvas: %sx%s", width, height)
+    LOGGER.info(
+        "CENTER_CROP_BLUR Foreground ratio: %s%s",
+        foreground_ratio,
+        " | auto=telegram" if auto_selected else "",
+    )
+    LOGGER.info(
+        "CENTER_CROP_BLUR Crop: %sx%s | x=%s | y=%s",
+        crop.crop_width,
+        crop.crop_height,
+        crop.crop_x,
+        crop.crop_y,
+    )
+    LOGGER.info(
+        "CENTER_CROP_BLUR Background: full frame | blur sigma=%s",
+        config.video.center_crop_blur.background_blur_sigma,
+    )
+    LOGGER.info("CENTER_CROP_BLUR Foreground scaling: disabled")
+    LOGGER.info(
+        "CENTER_CROP_BLUR Overlay: x=%s | y=%s",
+        (width - crop.crop_width) // 2,
+        (height - crop.crop_height) // 2,
+    )
+
+
+def _even(value: int) -> int:
+    return max(2, value - (value % 2))
 
 
 def _safe_stem(path: Path) -> str:

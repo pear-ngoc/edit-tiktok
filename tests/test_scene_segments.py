@@ -28,3 +28,13 @@ def test_generate_scene_segments_uses_scene_times(monkeypatch) -> None:
         (2.0, 3.0, 2),
         (3.0, 4.0, 3),
     ]
+
+
+def test_generate_scene_segments_does_not_fallback_to_random_without_scene(monkeypatch) -> None:
+    def fake_run_command(args, *, check=False):  # noqa: ANN001
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr("processing.video.run_command", fake_run_command)
+    segments = generate_scene_segments(Path("video.mp4"), 4.0, scene_threshold=0.5)
+
+    assert [(item.start, item.end, item.index) for item in segments] == [(0.0, 4.0, 0)]

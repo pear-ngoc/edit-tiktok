@@ -82,20 +82,26 @@ tiktokdl_fallback:
 
 video:
   aspect_ratio: "9:16"
-  mode: "blur"
+  foreground_aspect_ratio: "3:4"
+  mode: "center_crop_blur"
   target_resolution: "720p"
   keep_original_resolution: false
   speed: 1.1
-  segment_mode: "random"
+  segment_mode: "scene"
   min_segment_seconds: 3.0
   max_segment_seconds: 5.0
-  scene_threshold: 0.3
+  scene_threshold: 0.5
   alternating_flip: true
   base_zoom: 1.52
   alternating_zoom: [1.0, 1.05]
   fade_seconds: 0.5
   noise_overlay: false
   noise_alpha: 0.01
+  center_crop_blur:
+    foreground_aspect_ratio: "3:4"
+    preserve_input_resolution: true
+    background_blur_sigma: 30
+    allow_foreground_zoom: false
 
 color:
   lut_enabled: true

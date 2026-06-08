@@ -35,20 +35,30 @@ class QueueConfig:
 @dataclass(slots=True)
 class VideoConfig:
     aspect_ratio: str = "9:16"
-    mode: str = "blur"
+    foreground_aspect_ratio: str = "3:4"
+    mode: str = "center_crop_blur"
     target_resolution: str = "720p"
     keep_original_resolution: bool = False
     speed: float = 1.1
-    segment_mode: str = "random"
+    segment_mode: str = "scene"
     min_segment_seconds: float = 3.0
     max_segment_seconds: float = 5.0
-    scene_threshold: float = 0.3
+    scene_threshold: float = 0.5
     alternating_flip: bool = True
     base_zoom: float = 1.52
     alternating_zoom: list[float] = field(default_factory=lambda: [1.0, 1.05])
     fade_seconds: float = 0.5
     noise_overlay: bool = False
     noise_alpha: float = 0.01
+    center_crop_blur: "CenterCropBlurConfig" = field(default_factory=lambda: CenterCropBlurConfig())
+
+
+@dataclass(slots=True)
+class CenterCropBlurConfig:
+    foreground_aspect_ratio: str = "3:4"
+    preserve_input_resolution: bool = True
+    background_blur_sigma: int = 30
+    allow_foreground_zoom: bool = False
 
 
 @dataclass(slots=True)

@@ -41,7 +41,7 @@ def generate_scene_segments(
     video_path: Path,
     duration: float,
     *,
-    scene_threshold: float = 0.3,
+    scene_threshold: float = 0.5,
     min_scene_gap_seconds: float = 0.5,
     min_seconds: float = 3.0,
     max_seconds: float = 5.0,
@@ -49,12 +49,7 @@ def generate_scene_segments(
 ) -> list[Segment]:
     scene_times = _detect_scene_cut_times(video_path, scene_threshold)
     if not scene_times:
-        return generate_random_segments(
-            duration,
-            min_seconds=min_seconds,
-            max_seconds=max_seconds,
-            seed=seed,
-        )
+        return [Segment(start=0.0, end=duration, index=0)] if duration > 0 else []
 
     boundaries = [0.0]
     last_boundary = 0.0
@@ -76,12 +71,7 @@ def generate_scene_segments(
         segments.append(Segment(start=start, end=end, index=index))
 
     if not segments:
-        return generate_random_segments(
-            duration,
-            min_seconds=min_seconds,
-            max_seconds=max_seconds,
-            seed=seed,
-        )
+        return [Segment(start=0.0, end=duration, index=0)] if duration > 0 else []
     return segments
 
 

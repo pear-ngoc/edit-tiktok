@@ -8,8 +8,10 @@ from pathlib import Path
 
 from config import apply_overrides, ensure_config_file, load_config, save_default_config
 from ffmpeg_tools.encoders import detect_available_encoders, probe_encoder_capabilities, probe_nvidia_runtime, select_encoder
+from ffmpeg_tools.filters import suggest_center_crop_aspect_ratio
+from ffmpeg_tools.probe import probe_video
 from logging_config import configure_logging
-from models import AppConfig
+from models import AppConfig, VideoInfo
 from processing.batch import run_batch
 from processing.caption_renderer import available_caption_fonts
 from processing.lut import available_luts, parse_lut_selection_input
@@ -230,12 +232,14 @@ def wizard(
     config = _load_effective_config(project_root, config_profile=config_profile, overrides=overrides)
     if config is None:
         return
-    if not ensure_input_videos_exist(project_root, config):
+    input_videos = ensure_input_videos_exist(project_root, config)
+    if not input_videos:
         return
+    layout_sample = _probe_layout_sample_info(input_videos[0])
     print("Trình hướng dẫn tương tác")
     _configure_subtitles_interactively(config)
     config.video.aspect_ratio = _ask("Tỷ lệ khung hình", config.video.aspect_ratio)
-    config.video.mode = _ask("Chế độ (crop/blur/original/target)", config.video.mode)
+    _configure_video_layout_interactively(config, layout_sample)
     config.video.noise_overlay = _ask_bool("Bật lớp nhiễu", config.video.noise_overlay)
     config.audio.pitch_shift_semitones = float(
         _ask("Dịch cao độ (semitone)", str(config.audio.pitch_shift_semitones))
@@ -488,6 +492,55 @@ def _configure_subtitles_interactively(config: AppConfig) -> None:
         config.subtitles.burn_in = False
 
 
+def _configure_video_layout_interactively(config: AppConfig, layout_sample: VideoInfo | None) -> None:
+    current = config.video.mode
+    print("Video layout:")
+    print("1. Crop")
+    print("2. Cinematic blur")
+    print("3. Center crop over blurred original")
+    print("4. Original")
+    raw = input(f"Select video layout [{current}]: ").strip().lower()
+    selection_map = {
+        "1": "crop",
+        "crop": "crop",
+        "2": "blur",
+        "blur": "blur",
+        "cinematic blur": "blur",
+        "3": "center_crop_blur",
+        "center crop over blurred original": "center_crop_blur",
+        "center_crop_blur": "center_crop_blur",
+        "4": "original",
+        "original": "original",
+    }
+    selected = selection_map.get(raw, current if not raw else raw)
+    if selected not in {"crop", "blur", "center_crop_blur", "original"}:
+        selected = current
+    config.video.mode = selected
+    if config.video.mode == "center_crop_blur":
+        suggested_ratio = config.video.center_crop_blur.foreground_aspect_ratio
+        if layout_sample is not None:
+            suggested_ratio = suggest_center_crop_aspect_ratio(layout_sample.width, layout_sample.height)
+            print(
+                "Detected input ratio: "
+                f"{layout_sample.display_aspect_ratio or f'{layout_sample.width}:{layout_sample.height}'}"
+            )
+            print(f"Suggested foreground crop ratio: {suggested_ratio}")
+        config.video.center_crop_blur.foreground_aspect_ratio = _ask(
+            "Foreground crop ratio",
+            suggested_ratio,
+        )
+        config.video.center_crop_blur.preserve_input_resolution = True
+        config.video.center_crop_blur.allow_foreground_zoom = False
+
+
+def _probe_layout_sample_info(video_path: Path) -> VideoInfo | None:
+    try:
+        return probe_video(video_path)
+    except Exception as exc:
+        LOGGER.warning("Không probe được video để gợi ý crop ratio | path=%s | error=%s", video_path, exc)
+        return None
+
+
 def _ask(prompt: str, default: str) -> str:
     value = input(f"{prompt} [{default}]: ").strip()
     return value or default
@@ -540,6 +593,9 @@ def _print_wizard_summary(config: AppConfig) -> None:
     print("Tóm tắt cấu hình trước khi xử lý:")
     print(f"- Tỷ lệ khung hình: {config.video.aspect_ratio}")
     print(f"- Chế độ video: {config.video.mode}")
+    if config.video.mode == "center_crop_blur":
+        print(f"- Foreground ratio: {config.video.center_crop_blur.foreground_aspect_ratio}")
+        print(f"- Preserve input resolution: {config.video.center_crop_blur.preserve_input_resolution}")
     print(f"- LUT: {lut_summary}")
     print(f"- Phụ đề: {subtitle_summary}")
     print(f"- Burn captions: {burn_summary}")

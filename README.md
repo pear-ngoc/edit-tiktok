@@ -279,11 +279,29 @@ Nếu video không có audio, phần tạo phụ đề sẽ được bỏ qua an
 
 ## Cắt đoạn tự động
 
-Mặc định app sẽ chia video thành các đoạn ngắn ngẫu nhiên khoảng `3-5` giây, rồi áp dụng biến đổi xen kẽ như zoom và lật hình theo từng đoạn trước khi ghép lại.
+Mặc định app sẽ dùng `segment_mode: scene` để tìm các chuyển cảnh rõ bằng `ffmpeg`, rồi chỉ đổi hiệu ứng lật ở những đoạn sau chuyển cảnh đó.
 
-Nếu bạn muốn thử chế độ khác trong tương lai, phần `segment_mode` đã được tách riêng trong kiến trúc để dễ mở rộng thêm phát hiện cảnh tự động.
+`scene_threshold` mặc định là `0.5`; tăng giá trị này nếu chỉ muốn nhận các chuyển cảnh rất mạnh, hoặc giảm xuống nếu video có cut nhẹ hơn.
 
-Hiện `segment_mode: scene` sẽ cắt theo chuyển cảnh thật bằng `ffmpeg`, nên `alternating_flip` cũng sẽ đổi theo scene thay vì đổi mỗi 3-5 giây như mode random.
+Nếu không phát hiện chuyển cảnh đủ rõ, app sẽ xử lý video như một đoạn liền mạch và không tự fallback sang chia đoạn random để lật hình.
+
+### Center crop over blurred original
+
+Ngoài các mode cũ `crop`, `blur`, `original`, `target`, app còn có `center_crop_blur`.
+Mode này giữ nguyên canvas đầu vào, làm mờ toàn bộ frame gốc ở nền, rồi crop phần giữa của video theo tỷ lệ `foreground_aspect_ratio` và đặt lên chính giữa mà không scale foreground.
+Wizard sẽ tự xem tỷ lệ video đầu vào để gợi ý crop ratio gần nhất, còn job đi từ Telegram sẽ tự chọn crop ratio gần nhất theo từng video.
+
+```yaml
+video:
+  mode: center_crop_blur
+  center_crop_blur:
+    foreground_aspect_ratio: "3:4"
+    preserve_input_resolution: true
+    background_blur_sigma: 30
+    allow_foreground_zoom: false
+```
+
+Trong wizard, mode này hiện dưới tên `Center crop over blurred original`.
 
 ## Cấu hình quan trọng
 

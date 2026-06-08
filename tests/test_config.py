@@ -11,6 +11,14 @@ def test_config_created_when_missing(tmp_path: Path) -> None:
     config = load_config(tmp_path)
     assert config.processing.input_dir == "input"
     assert config.video.aspect_ratio == "9:16"
+    assert config.video.foreground_aspect_ratio == "3:4"
+    assert config.video.mode == "center_crop_blur"
+    assert config.video.segment_mode == "scene"
+    assert config.video.scene_threshold == 0.5
+    assert config.video.center_crop_blur.foreground_aspect_ratio == "3:4"
+    assert config.video.center_crop_blur.preserve_input_resolution is True
+    assert config.video.center_crop_blur.background_blur_sigma == 30
+    assert config.video.center_crop_blur.allow_foreground_zoom is False
     assert config.subtitles.enabled is True
     assert config.subtitles.model_size == "medium"
     assert config.subtitles.output_vtt is False

@@ -34,6 +34,7 @@ from models import (
     SubtitlesConfig,
     VideotoolboxConfig,
     VideoConfig,
+    CenterCropBlurConfig,
 )
 
 T = TypeVar("T")
@@ -117,7 +118,7 @@ def config_from_dict(data: dict[str, Any]) -> AppConfig:
     return AppConfig(
         processing=_section(ProcessingConfig, data.get("processing", {}), section_name="processing"),
         queue=_section(QueueConfig, data.get("queue", {}), section_name="queue"),
-        video=_section(VideoConfig, data.get("video", {}), section_name="video"),
+        video=_video_section(data.get("video", {})),
         color=_section(ColorConfig, data.get("color", {}), section_name="color"),
         audio=_section(AudioConfig, data.get("audio", {}), section_name="audio"),
         metadata=_section(MetadataConfig, data.get("metadata", {}), section_name="metadata"),
@@ -398,6 +399,18 @@ def _storage_section(data: dict[str, Any]) -> StorageConfig:
     config.telegram = telegram
     config.google_drive = google_drive
     return config
+
+
+def _video_section(data: dict[str, Any]) -> VideoConfig:
+    raw = data or {}
+    base = {key: value for key, value in raw.items() if key != "center_crop_blur"}
+    video = _section(VideoConfig, base, section_name="video")
+    video.center_crop_blur = _section(
+        CenterCropBlurConfig,
+        raw.get("center_crop_blur", {}),
+        section_name="video.center_crop_blur",
+    )
+    return video
 
 
 def _parse_scalar(value: str) -> Any:
