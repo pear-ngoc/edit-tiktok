@@ -408,6 +408,59 @@ def test_no_audio_skips_subtitle_generation(tmp_path: Path, monkeypatch) -> None
     assert result is None
 
 
+def test_language_override_is_passed_to_transcription(tmp_path: Path, monkeypatch) -> None:
+    project_root = tmp_path
+    temp_root = tmp_path / "temp"
+    temp_root.mkdir()
+    (tmp_path / "output" / "subtitles").mkdir(parents=True)
+
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        subtitles_module,
+        "probe_video",
+        lambda _: VideoInfo(path=Path("x.mp4"), duration=2.0, width=1080, height=1920, fps=30.0, has_audio=True),
+    )
+
+    class FakeManager:
+        def __init__(self, config, job_context):  # noqa: ANN001
+            pass
+
+        def resolve_backend(self) -> str:
+            return "groq"
+
+        def transcribe(self, media_path: Path, language: str | None):  # noqa: ANN001
+            captured["language"] = language
+            return type(
+                "Result",
+                (),
+                {
+                    "backend": "groq",
+                    "language": "vi",
+                    "segments": [],
+                    "words": [
+                        type("Word", (), {"text": "Xin", "start": 0.0, "end": 0.5})(),
+                        type("Word", (), {"text": "chao", "start": 0.55, "end": 1.0})(),
+                    ],
+                },
+            )()
+
+    monkeypatch.setattr(subtitles_module, "TranscriptionManager", FakeManager)
+
+    result = subtitles_module.generate_subtitles_for_video(
+        tmp_path / "video.mp4",
+        SubtitlesConfig(enabled=True, language="auto"),
+        project_root,
+        temp_root,
+        language_override="vi",
+        debug=False,
+    )
+
+    assert captured["language"] == "vi"
+    assert result is not None
+    assert result.language == "vi"
+
+
 def test_wrap_caption_text_limits_to_two_lines() -> None:
     lines = subtitles_module.wrap_caption_text(
         "Những anh em đi trước hoặc trong ngành cho mình xin lời khuyên",

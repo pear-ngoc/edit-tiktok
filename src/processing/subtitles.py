@@ -311,6 +311,7 @@ def generate_subtitles_for_video(
     output_stem: str | None = None,
     debug: bool = False,
     formatting: FormattingConfig | None = None,
+    language_override: str | None = None,
     job_context: JobRuntimeContext | None = None,
 ) -> SubtitleGenerationResult | None:
     subtitles_config, formatting_config = _resolve_subtitle_configs(config, formatting)
@@ -328,6 +329,7 @@ def generate_subtitles_for_video(
 
     stem = output_stem or video_path.stem
     runtime_context = job_context or _fallback_job_context(video_path, subtitle_dir)
+    requested_language = (language_override or subtitles_config.language or "auto").strip() or "auto"
 
     with job_context_scope(runtime_context):
         manager = TranscriptionManager(subtitles_config, runtime_context)
@@ -338,11 +340,11 @@ def generate_subtitles_for_video(
             subtitles_config.backend,
             resolved_backend,
             subtitles_config.groq.model if resolved_backend == "groq" else subtitles_config.model_size,
-            subtitles_config.language,
+            requested_language,
         )
 
         try:
-            transcription_result = manager.transcribe(video_path, subtitles_config.language)
+            transcription_result = manager.transcribe(video_path, requested_language)
             detected_language = transcription_result.language
             raw_segments = [
                 {"text": seg.text, "start": seg.start, "end": seg.end, "words": seg.words}
@@ -425,7 +427,7 @@ def generate_subtitles_for_video(
         "Tạo phụ đề hoàn tất cho %s | backend=%s | language=%s | detected=%s | raw_segments=%s | word_timestamps=%s | cues=%s | max_lines=%s",
         video_path,
         transcription_result.backend,
-        subtitles_config.language,
+        requested_language,
         detected_language or "unknown",
         len(raw_segments),
         len(words),
@@ -439,7 +441,7 @@ def generate_subtitles_for_video(
         vtt_path=vtt_path,
         ass_path=ass_path,
         cues=cues,
-        language=subtitles_config.language,
+        language=requested_language,
         detected_language=detected_language,
     )
 

@@ -11,7 +11,7 @@ from integrations.revid_api import (
     select_download_url,
 )
 from integrations.telegram_bot import TelegramBotService
-from integrations.tiktok import extract_tiktok_urls
+from integrations.tiktok import extract_tiktok_urls, parse_tiktok_url_input
 from models import JobSource, JobStatus, ProcessResult, VideoJob
 from queue_manager import QueueManager, discover_queueable_videos
 from utils.files import VIDEO_EXTENSIONS
@@ -107,6 +107,18 @@ def test_tiktok_url_extraction() -> None:
         "https://www.tiktok.com/@user/video/123",
         "https://vt.tiktok.com/abc",
     ]
+
+
+def test_tiktok_url_language_suffix_is_parsed() -> None:
+    url, language = parse_tiktok_url_input("https://www.tiktok.com/@user/video/123?x=1|vi")
+    assert url == "https://www.tiktok.com/@user/video/123?x=1"
+    assert language == "vi"
+
+
+def test_tiktok_url_invalid_suffix_does_not_break_url() -> None:
+    url, language = parse_tiktok_url_input("https://www.tiktok.com/@user/video/123|vietnamese")
+    assert url == "https://www.tiktok.com/@user/video/123"
+    assert language is None
 
 
 def test_revid_response_parsing_and_fallback(monkeypatch, tmp_path: Path) -> None:

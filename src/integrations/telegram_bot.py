@@ -16,7 +16,7 @@ from integrations.revid_api import (
     select_download_url,
     select_tiktokdl_url,
 )
-from integrations.tiktok import extract_tiktok_urls
+from integrations.tiktok import extract_tiktok_urls, parse_tiktok_url_input
 from models import AppConfig, JobSource, JobStatus, ProcessResult, VideoJob
 from utils.files import sanitize_filename, unique_path
 from utils.cleanup import clear_workspace as clear_runtime_workspace
@@ -248,8 +248,9 @@ class TelegramBotService:
         if not urls:
             return
 
-        for url in urls:
-            await self._handle_tiktok_url(message, chat_id, url)
+        for raw_url in urls:
+            url, subtitle_language_override = parse_tiktok_url_input(raw_url)
+            await self._handle_tiktok_url(message, chat_id, url, subtitle_language_override)
 
     async def _handle_clear_command(self, update: Any, context: Any) -> None:  # noqa: ANN401
         message = update.effective_message
@@ -294,7 +295,13 @@ class TelegramBotService:
             LOGGER.exception("Telegram clear workspace thất bại | chat_id=%s | scope=%s", chat_id, scope)
             await message.reply_text(f"❌ Clear thất bại: {_safe_telegram_error(str(exc))}")
 
-    async def _handle_tiktok_url(self, message: Any, chat_id: int, url: str) -> None:  # noqa: ANN401
+    async def _handle_tiktok_url(
+        self,
+        message: Any,
+        chat_id: int,
+        url: str,
+        subtitle_language_override: str | None = None,
+    ) -> None:  # noqa: ANN401
         try:
             initial_message = None
             initial_text = self._stage_text(
@@ -381,6 +388,7 @@ class TelegramBotService:
                 telegram_status_message_id=initial_message.message_id if initial_message else None,
                 telegram_status_text=initial_text if initial_message else "",
                 original_url=url,
+                subtitle_language_override=subtitle_language_override,
                 queue_now=True,
             )
             if job is None:

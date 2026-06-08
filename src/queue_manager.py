@@ -152,6 +152,7 @@ class QueueManager:
         telegram_status_message_id: int | None = None,
         telegram_status_text: str = "",
         original_url: str | None = None,
+        subtitle_language_override: str | None = None,
         queue_now: bool = True,
     ) -> VideoJob | None:
         resolved = path.resolve()
@@ -178,6 +179,8 @@ class QueueManager:
                     job.telegram_status_text = telegram_status_text
                 if original_url and not job.original_url:
                     job.original_url = original_url
+                if subtitle_language_override and not job.subtitle_language_override:
+                    job.subtitle_language_override = subtitle_language_override
                 if source == JobSource.TELEGRAM_TIKTOK and job.source == JobSource.LOCAL_INPUT:
                     job.source = source
                 self.save_state_locked()
@@ -204,6 +207,7 @@ class QueueManager:
                 telegram_status_message_id=telegram_status_message_id,
                 telegram_status_text=telegram_status_text,
                 original_url=original_url,
+                subtitle_language_override=subtitle_language_override,
                 created_at=utc_now_iso(),
                 file_size=stat.st_size,
                 modified_time=stat.st_mtime,
@@ -601,6 +605,7 @@ def job_from_dict(data: dict[str, Any]) -> VideoJob:
         modified_time=float(data.get("modified_time", 0.0)),
         identity=str(data.get("identity", "")),
         metadata_path=str(data["metadata_path"]) if data.get("metadata_path") else None,
+        subtitle_language_override=str(data["subtitle_language_override"]) if data.get("subtitle_language_override") else None,
         output_size=int(data.get("output_size", 0)),
     )
 

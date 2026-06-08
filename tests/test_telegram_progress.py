@@ -29,6 +29,7 @@ class DummyQueueManager:
             telegram_status_message_id=kwargs.get("telegram_status_message_id"),
             telegram_status_text=kwargs.get("telegram_status_text", ""),
             original_url=kwargs.get("original_url"),
+            subtitle_language_override=kwargs.get("subtitle_language_override"),
         )
         self.jobs[job.job_id] = job
         return job
@@ -103,6 +104,44 @@ def test_initial_link_creates_one_status_message_and_stores_ids(tmp_path: Path, 
     assert queue_manager.enqueue_calls[0]["telegram_status_message_id"] == 777
     assert queue_manager.enqueue_calls[0]["telegram_status_text"] == sent["text"]
     assert queue_manager.enqueue_calls[0]["original_url"] == "https://www.tiktok.com/@user/video/1"
+
+
+def test_tiktok_link_language_suffix_is_stored_on_job(tmp_path: Path, monkeypatch) -> None:
+    service, queue_manager = _make_service(tmp_path, monkeypatch)
+
+    class FakeMessage:
+        message_id = 778
+
+    async def fake_send_initial_status_message(chat_id: int, text: str):  # noqa: ANN001
+        return FakeMessage()
+
+    monkeypatch.setattr(service, "_send_initial_status_message", fake_send_initial_status_message)
+    monkeypatch.setattr(
+        "integrations.telegram_bot.fetch_tiktok_download_info",
+        lambda *args, **kwargs: [{"video_url": "https://example.com/video.mp4", "uploader": "tester"}],
+    )
+    monkeypatch.setattr("integrations.telegram_bot.select_download_url", lambda payload: payload[0]["video_url"])
+    monkeypatch.setattr(
+        "integrations.telegram_bot.download_video_from_url",
+        lambda url, output_path, timeout: output_path.write_bytes(b"video") or output_path,
+    )
+
+    async def run() -> None:
+        await service._handle_message(
+            SimpleNamespace(
+                effective_message=SimpleNamespace(
+                    text="https://www.tiktok.com/@user/video/1|vi",
+                    caption="",
+                ),
+                effective_chat=SimpleNamespace(id=7032252869),
+            ),
+            SimpleNamespace(),
+        )
+
+    asyncio.run(run())
+
+    assert queue_manager.enqueue_calls[0]["original_url"] == "https://www.tiktok.com/@user/video/1"
+    assert queue_manager.enqueue_calls[0]["subtitle_language_override"] == "vi"
 
 
 def test_status_text_edit_is_deduplicated(tmp_path: Path, monkeypatch) -> None:

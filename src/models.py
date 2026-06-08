@@ -377,6 +377,7 @@ class VideoJob:
     modified_time: float = 0.0
     identity: str = ""
     metadata_path: str | None = None
+    subtitle_language_override: str | None = None
     output_size: int = 0
 
 

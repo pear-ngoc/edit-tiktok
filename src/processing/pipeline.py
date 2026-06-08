@@ -196,6 +196,7 @@ def process_video(
                     config=config,
                     encoder=encoder,
                     progress_callback=progress_callback,
+                    job=job,
                     job_context=job_context,
                     ffmpeg_debug=ffmpeg_debug,
                 )
@@ -996,6 +997,7 @@ def _handle_subtitles(
     config: AppConfig,
     encoder: EncoderSelection,
     progress_callback: Callable[[str, str], None] | None = None,
+    job: VideoJob | None = None,
     job_context: JobRuntimeContext | None = None,
     ffmpeg_debug: bool = False,
 ) -> Path:
@@ -1015,6 +1017,7 @@ def _handle_subtitles(
             temp_root,
             output_stem=output_file.stem,
             debug=ffmpeg_debug,
+            language_override=job.subtitle_language_override if job else None,
             job_context=job_context,
         )
         if not subtitle_result:
