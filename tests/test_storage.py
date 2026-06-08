@@ -8,6 +8,7 @@ import pytest
 from config import config_from_dict, default_config
 from models import JobSource, JobStatus, VideoJob
 from storage.base import StorageContext, StorageUploadResult
+from storage import google_drive as google_drive_module
 from storage.google_drive import _resolve_credentials_path
 from storage.manager import StorageManager
 from storage.telegram import TelegramStorageProvider
@@ -214,3 +215,72 @@ def test_storage_doctor_does_not_upload_files(tmp_path: Path, monkeypatch: pytes
     lines = StorageManager(tmp_path, config).doctor()
     assert lines[0] == "Storage provider: local"
     assert called["upload"] is False
+
+
+def test_google_drive_remote_name_uses_revid_title_without_hashtags(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = default_config()
+    metadata = tmp_path / "download.json"
+    metadata.write_text(
+        '{"payload":[{"title":"Video #xuhuong #reup"}]}',
+        encoding="utf-8",
+    )
+    job = _job(tmp_path, source=JobSource.TELEGRAM_TIKTOK)
+    job.metadata_path = str(metadata)
+
+    class FrozenDateTime:
+        @classmethod
+        def now(cls):  # noqa: ANN102
+            from datetime import datetime
+
+            return datetime(2026, 6, 8, 12, 34, 56)
+
+    monkeypatch.setattr(google_drive_module, "datetime", FrozenDateTime)
+    remote_name = google_drive_module._remote_name(_video(tmp_path), StorageContext(tmp_path, job, config))
+    assert remote_name == "Video_20260608123456.mp4"
+
+
+def test_google_drive_remote_name_uses_nested_data_title(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    config = default_config()
+    metadata = tmp_path / "download.json"
+    metadata.write_text(
+        '{"payload":{"success":true,"data":{"title":"Xin chao #viral #fyp"}}}',
+        encoding="utf-8",
+    )
+    job = _job(tmp_path, source=JobSource.TELEGRAM_TIKTOK)
+    job.metadata_path = str(metadata)
+
+    class FrozenDateTime:
+        @classmethod
+        def now(cls):  # noqa: ANN102
+            from datetime import datetime
+
+            return datetime(2026, 6, 8, 1, 2, 3)
+
+    monkeypatch.setattr(google_drive_module, "datetime", FrozenDateTime)
+    remote_name = google_drive_module._remote_name(_video(tmp_path), StorageContext(tmp_path, job, config))
+    assert remote_name == "Xin_chao_20260608010203.mp4"
+
+
+def test_google_drive_subtitle_upload_keeps_fallback_name(tmp_path: Path) -> None:
+    config = default_config()
+    metadata = tmp_path / "download.json"
+    metadata.write_text(
+        '{"payload":[{"title":"Video #xuhuong #reup"}]}',
+        encoding="utf-8",
+    )
+    subtitle = tmp_path / "output.srt"
+    subtitle.write_text("1\n00:00:00,000 --> 00:00:01,000\nhello\n", encoding="utf-8")
+    job = _job(tmp_path, source=JobSource.TELEGRAM_TIKTOK)
+    job.metadata_path = str(metadata)
+
+    remote_name = google_drive_module._remote_name(
+        subtitle,
+        StorageContext(tmp_path, job, config, is_subtitle=True),
+    )
+    assert remote_name == "job_123abc_output.srt"

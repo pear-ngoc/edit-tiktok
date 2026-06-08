@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import json
 import logging
 import mimetypes
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from models import StorageGoogleDriveConfig
 from storage.base import PermanentStorageError, StorageContext, StorageUploadResult
+from utils.files import sanitize_filename
 
 LOGGER = logging.getLogger(__name__)
 DRIVE_SCOPES = ["https://www.googleapis.com/auth/drive"]
@@ -236,10 +240,73 @@ def _upload_resumable(service: Any, file_path: Path, context: StorageContext) ->
 
 
 def _remote_name(file_path: Path, context: StorageContext) -> str:
+    titled_name = _title_based_remote_name(file_path, context)
+    if titled_name:
+        return titled_name
     cfg = context.config.storage.google_drive
     if cfg.overwrite_existing:
         return file_path.name
     return f"{context.job.job_id}_{file_path.name}"
+
+
+def _title_based_remote_name(file_path: Path, context: StorageContext) -> str | None:
+    if context.is_subtitle:
+        return None
+    title = _resolve_download_title(context.job.metadata_path)
+    if not title:
+        return None
+    stem = _normalize_title_stem(title)
+    timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+    suffix = file_path.suffix.lower() or ".mp4"
+    return f"{stem}_{timestamp}{suffix}"
+
+
+def _resolve_download_title(metadata_path: str | None) -> str | None:
+    if not metadata_path:
+        return None
+    path = Path(metadata_path)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return _extract_title_from_payload(payload)
+
+
+def _extract_title_from_payload(payload: Any) -> str | None:
+    if isinstance(payload, dict):
+        direct_title = _coerce_title(payload.get("title"))
+        if direct_title:
+            return direct_title
+        nested = payload.get("payload")
+        nested_title = _extract_title_from_payload(nested)
+        if nested_title:
+            return nested_title
+        data_title = payload.get("data")
+        return _extract_title_from_payload(data_title)
+    if isinstance(payload, list):
+        for item in payload:
+            title = _extract_title_from_payload(item)
+            if title:
+                return title
+    return None
+
+
+def _coerce_title(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    title = value.strip()
+    return title or None
+
+
+def _normalize_title_stem(title: str) -> str:
+    without_hashtags = re.sub(r"(?:^|\s)#[^\s#]+", " ", title)
+    collapsed = re.sub(r"\s+", " ", without_hashtags).strip()
+    safe_name = sanitize_filename(collapsed or "video", replacement="_")
+    normalized = safe_name.replace(" ", "_")
+    normalized = re.sub(r"_+", "_", normalized).strip("._")
+    return normalized or "video"
 
 
 def _make_public(service: Any, file_id: str, shared_drive_id: str) -> None:

@@ -43,7 +43,7 @@ class VideoConfig:
     segment_mode: str = "scene"
     min_segment_seconds: float = 3.0
     max_segment_seconds: float = 5.0
-    scene_threshold: float = 0.5
+    scene_threshold: float = 1
     alternating_flip: bool = True
     base_zoom: float = 1.52
     alternating_zoom: list[float] = field(default_factory=lambda: [1.0, 1.05])

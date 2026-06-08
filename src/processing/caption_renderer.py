@@ -365,7 +365,7 @@ def build_caption_overlay_filter(
         filter_parts.append(f"[{index}:v]format=rgba[{cap_label}]")
         filter_parts.append(
             f"[{current_label}][{cap_label}]overlay=x=(W-w)/2:y=H-h-{total_offset}:"
-            f"enable='between(t,{asset.start:.3f},{asset.end:.3f})':shortest=1[{out_label}]"
+            f"enable='between(t,{asset.start:.3f},{asset.end:.3f})':eof_action=pass[{out_label}]"
         )
         current_label = out_label
     final_label = f"[{current_label}]"

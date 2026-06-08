@@ -184,7 +184,7 @@ def split_words_into_caption_cues(
                 )
             )
             current = []
-        elif _ends_caption(word.text) and current_duration >= min_duration:
+        elif _ends_caption(word.text) and (current_duration >= min_duration or len(current) >= 2):
             cues.append(
                 _build_caption_cue(
                     current,
@@ -365,20 +365,32 @@ def generate_subtitles_for_video(
             LOGGER.error("Chi tiết lỗi phụ đề: %s", exc)
             return None
 
-    if not words:
-        LOGGER.warning("Không có word timestamps nào được tạo cho %s", video_path)
-        return None
-
     with stage_scope(runtime_context, "SPLIT_CAPTION_CUES", logger=LOGGER):
-        cues = split_words_into_caption_cues(
-            words,
-            max_chars_per_line=formatting_config.max_chars_per_line,
-            max_lines=formatting_config.max_lines,
-            max_chars_per_cue=formatting_config.max_chars_per_cue,
-            max_words_per_cue=formatting_config.max_words_per_cue,
+        if _should_fallback_to_segment_cues(raw_segments, words):
+            LOGGER.warning(
+                "Word timestamps qua it hoac khong du tin cay cho %s, fallback sang segment cues.",
+                video_path,
+            )
+            cues = build_segment_caption_cues(
+                raw_segments,
+                max_chars_per_line=formatting_config.max_chars_per_line,
+                max_lines=formatting_config.max_lines,
+            )
+        else:
+            cues = split_words_into_caption_cues(
+                words,
+                max_chars_per_line=formatting_config.max_chars_per_line,
+                max_lines=formatting_config.max_lines,
+                max_chars_per_cue=formatting_config.max_chars_per_cue,
+                max_words_per_cue=formatting_config.max_words_per_cue,
+                min_duration=formatting_config.min_duration,
+                max_duration=formatting_config.max_duration,
+                pause_threshold=formatting_config.pause_threshold,
+            )
+        cues = stabilize_caption_cues(
+            cues,
             min_duration=formatting_config.min_duration,
-            max_duration=formatting_config.max_duration,
-            pause_threshold=formatting_config.pause_threshold,
+            media_duration=probe.duration,
         )
     if not cues:
         LOGGER.warning("Không có caption cue hợp lệ nào được tạo cho %s", video_path)
@@ -714,6 +726,97 @@ def _build_caption_cue(
     if not lines:
         lines = [text]
     return SubtitleCue(start=start, end=end, text="\n".join(lines), lines=lines)
+
+
+def build_segment_caption_cues(
+    segments: Iterable[dict[str, Any] | Any],
+    *,
+    max_chars_per_line: int,
+    max_lines: int,
+) -> list[SubtitleCue]:
+    cues: list[SubtitleCue] = []
+    for item in segments:
+        text = ""
+        start = 0.0
+        end = 0.0
+        if isinstance(item, dict):
+            text = str(item.get("text", "") or "").replace("\n", " ").strip()
+            start = float(item.get("start", 0.0) or 0.0)
+            end = float(item.get("end", start) or start)
+        else:
+            text = str(getattr(item, "text", "") or "").replace("\n", " ").strip()
+            start = float(getattr(item, "start", 0.0) or 0.0)
+            end = float(getattr(item, "end", start) or start)
+        if not text:
+            continue
+        lines = wrap_caption_text(text, max_chars_per_line=max_chars_per_line, max_lines=max_lines)
+        if not lines:
+            lines = [text]
+        cues.append(
+            SubtitleCue(
+                start=start,
+                end=max(end, start + 0.01),
+                text="\n".join(lines),
+                lines=lines,
+            )
+        )
+    return cues
+
+
+def stabilize_caption_cues(
+    cues: Iterable[SubtitleCue],
+    *,
+    min_duration: float,
+    media_duration: float | None = None,
+) -> list[SubtitleCue]:
+    ordered = sorted(
+        (
+            SubtitleCue(
+                start=max(0.0, float(cue.start)),
+                end=max(float(cue.end), float(cue.start)),
+                text=cue.text,
+                lines=list(cue.lines),
+            )
+            for cue in cues
+            if cue.text.strip()
+        ),
+        key=lambda cue: (cue.start, cue.end),
+    )
+    if not ordered:
+        return []
+
+    bounded_duration = max(0.0, float(media_duration or 0.0))
+    stabilized: list[SubtitleCue] = []
+    for index, cue in enumerate(ordered):
+        next_start = ordered[index + 1].start if index + 1 < len(ordered) else None
+        desired_end = max(cue.end, cue.start + max(0.0, float(min_duration)))
+        if next_start is not None and next_start > cue.end:
+            desired_end = min(desired_end, next_start)
+        if bounded_duration > 0:
+            desired_end = min(desired_end, bounded_duration)
+        stabilized.append(
+            SubtitleCue(
+                start=cue.start,
+                end=max(cue.end, desired_end),
+                text=cue.text,
+                lines=list(cue.lines),
+            )
+        )
+    return stabilized
+
+
+def _should_fallback_to_segment_cues(
+    raw_segments: list[dict[str, Any]],
+    words: list[SubtitleWord],
+) -> bool:
+    if not raw_segments:
+        return False
+    if not words:
+        return True
+    segment_token_count = sum(len(str(seg.get("text", "") or "").split()) for seg in raw_segments)
+    if segment_token_count <= 0:
+        return False
+    return len(words) <= 1 and segment_token_count > len(words)
 
 
 def _join_words(words: list[SubtitleWord]) -> str:

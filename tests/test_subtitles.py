@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from ffmpeg_tools.encoders import EncoderSelection
 from ffmpeg_tools.filters import build_ass_burn_filter, build_subtitles_burn_filter
 from ffmpeg_tools.runner import CommandResult
@@ -96,6 +98,52 @@ def test_pause_creates_break() -> None:
     assert len(cues) == 2
     assert cues[0].text == "Xin chào"
     assert cues[1].text == "mọi người"
+
+
+def test_stabilize_caption_cues_extends_short_single_cue() -> None:
+    cues = subtitles_module.stabilize_caption_cues(
+        [
+            subtitles_module.SubtitleCue(
+                start=0.46,
+                end=0.70,
+                text="You",
+                lines=["You"],
+            )
+        ],
+        min_duration=0.7,
+        media_duration=21.87,
+    )
+
+    assert len(cues) == 1
+    assert cues[0].start == 0.46
+    assert cues[0].end == pytest.approx(1.16)
+
+
+def test_build_segment_caption_cues_creates_lines_without_word_timestamps() -> None:
+    cues = subtitles_module.build_segment_caption_cues(
+        [
+            {"text": "Xin chao moi nguoi", "start": 0.0, "end": 1.5},
+            {"text": "Chung ta tiep tuc", "start": 1.7, "end": 3.0},
+        ],
+        max_chars_per_line=20,
+        max_lines=2,
+    )
+
+    assert len(cues) == 2
+    assert cues[0].text
+    assert cues[0].end == 1.5
+
+
+def test_overlay_filter_uses_eof_action_pass() -> None:
+    from processing.caption_renderer import RenderedCaptionAsset, build_caption_overlay_filter
+
+    _, filter_complex, _ = build_caption_overlay_filter(
+        [RenderedCaptionAsset(image_path=Path("cue_0001.png"), start=0.0, end=1.0)],
+        margin_v=140,
+        vertical_offset=0,
+    )
+
+    assert "eof_action=pass" in filter_complex
 
 
 def test_write_srt_and_vtt(tmp_path: Path) -> None:
