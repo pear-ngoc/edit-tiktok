@@ -431,6 +431,73 @@ def test_deduplicate_words_removes_duplicates() -> None:
     assert result[2].text == "again"
 
 
+def test_deduplicate_words_keeps_adjacent_distinct_words() -> None:
+    from processing.transcription.groq import _deduplicate_words
+    from processing.transcription.models import TranscriptionWord
+
+    words = [
+        TranscriptionWord(text="Jeśli", start=0.02, end=0.26),
+        TranscriptionWord(text="ktoś", start=0.26, end=0.56),
+        TranscriptionWord(text="trzaśnie", start=0.56, end=0.98),
+        TranscriptionWord(text="drzwiami", start=0.98, end=1.30),
+    ]
+
+    result = _deduplicate_words(words)
+
+    assert [word.text for word in result] == ["Jeśli", "ktoś", "trzaśnie", "drzwiami"]
+
+
+def test_groq_upload_sends_all_timestamp_granularities(
+    tmp_path: Path,
+    groq_config: "GroqTranscriptionConfig",
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from processing.transcription.groq import _upload_and_transcribe_chunk
+
+    audio_file = tmp_path / "test.mp3"
+    audio_file.write_bytes(b"fake audio")
+
+    captured: dict = {}
+
+    class FakeClient:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def post(self, url, **kwargs):
+            captured["files"] = kwargs.get("files") or []
+            return _mock_response(
+                200,
+                {
+                    "text": "ok",
+                    "language": "pl",
+                    "segments": [{"text": "ok", "start": 0.0, "end": 1.0, "words": []}],
+                    "words": [{"word": "ok", "start": 0.0, "end": 1.0}],
+                },
+            )
+
+    monkeypatch.setattr(httpx, "Client", FakeClient)
+
+    _upload_and_transcribe_chunk(
+        audio_file,
+        groq_config,
+        language="pl",
+        api_key="sk-test",
+        chunk_index=0,
+        total_chunks=1,
+        job_context=None,
+    )
+
+    files = captured.get("files", [])
+    granularity_values = [value[1] for key, value in files if key == "timestamp_granularities[]"]
+    assert granularity_values == ["segment", "word"]
+
+
 # ---------------------------------------------------------------------------
 # Retry logic
 # ---------------------------------------------------------------------------

@@ -163,10 +163,15 @@ def _deduplicate_words(words: list[TranscriptionWord]) -> list[TranscriptionWord
         return []
     result: list[TranscriptionWord] = [words[0]]
     for w in words[1:]:
-        if w.start > result[-1].end + 0.05:
-            result.append(w)
-        elif w.text != result[-1].text:
-            result[-1] = w
+        previous = result[-1]
+        same_text = w.text == previous.text
+        same_window = abs(w.start - previous.start) <= 0.05 and abs(w.end - previous.end) <= 0.10
+        overlapping_duplicate = same_text and w.start <= previous.end + 0.05
+        if same_window or overlapping_duplicate:
+            if w.end > previous.end:
+                result[-1] = w
+            continue
+        result.append(w)
     return result
 
 
@@ -276,20 +281,25 @@ def _upload_and_transcribe_chunk(
     headers: dict[str, str] = {
         "Authorization": f"Bearer {api_key}",
     }
-    files: dict[str, Any] = {
-        "file": (
-            audio_chunk_path.name.replace(".wav", ".mp3"),
-            audio_chunk_path.read_bytes(),
-            "audio/mpeg",
+    file_name = audio_chunk_path.name
+    mime_type = "audio/wav" if audio_chunk_path.suffix.lower() == ".wav" else "audio/mpeg"
+    files: list[tuple[str, Any]] = [
+        (
+            "file",
+            (
+                file_name,
+                audio_chunk_path.read_bytes(),
+                mime_type,
+            ),
         ),
-        "model": (None, config.model),
-        "temperature": (None, str(config.temperature)),
-        "response_format": (None, config.response_format),
-    }
+        ("model", (None, config.model)),
+        ("temperature", (None, str(config.temperature))),
+        ("response_format", (None, config.response_format)),
+    ]
     for granularity in config.timestamp_granularities:
-        files["timestamp_granularities[]"] = (None, granularity)
+        files.append(("timestamp_granularities[]", (None, granularity)))
     if language and language != "auto":
-        files["language"] = (None, language)
+        files.append(("language", (None, language)))
 
     LOGGER.debug(
         "%s [TRANSCRIBE] Groq chunk upload | host=%s | model=%s | audio_size=%s | chunk=%s/%s",

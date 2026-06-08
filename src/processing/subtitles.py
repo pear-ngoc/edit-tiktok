@@ -345,6 +345,9 @@ def generate_subtitles_for_video(
 
         try:
             transcription_result = manager.transcribe(video_path, requested_language)
+            # use logger to print all transcription_result 
+            LOGGER.info("Transcription result: %s", transcription_result)   
+
             detected_language = transcription_result.language
             raw_segments = [
                 {"text": seg.text, "start": seg.start, "end": seg.end, "words": seg.words}
